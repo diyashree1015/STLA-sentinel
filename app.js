@@ -665,23 +665,133 @@ function startRealtimeFaceTracker() {
     const pw = box.w * width;
     const ph = box.h * height;
 
-    // Determine Head Gaze / Alignment telemetry from box center
+    // Determine Head Gaze, Alignment, and Attentiveness score from face position telemetry
     const faceCenterX = box.x + box.w / 2;
+    const faceCenterY = box.y + box.h / 2;
+    
     let gaze = 'Road Center';
     let gazeColor = 'var(--color-success)';
-    if (faceCenterX < 0.38) {
+    let currentScore = 96;
+    let scoreText = 'Driver Fully Alert';
+    let scoreColor = 'var(--color-success)';
+    let circleClass = 'circle-bar success';
+    let drowsinessText = 'ALERT';
+    let drowsinessClass = 'factor-status-pill success';
+    let phoneText = 'NONE';
+    let phoneClass = 'factor-status-pill success';
+    let yawningText = '0 / hr';
+    let yawningClass = 'factor-status-pill success';
+    let laneText = '98% Match';
+    let laneClass = 'factor-status-pill success';
+    let voiceAlertText = '"Live Camera: Face lock active. Driver fully alert and attentive."';
+
+    // Telemetry evaluation
+    if (box.w < 0.1 || box.h < 0.1) {
+      // Driver out of frame / absent
+      currentScore = 30;
+      gaze = 'No Driver Detected';
+      gazeColor = 'var(--color-danger)';
+      scoreText = 'No Driver Detected';
+      scoreColor = 'var(--color-danger)';
+      circleClass = 'circle-bar danger';
+      drowsinessText = 'UNATTENDED';
+      drowsinessClass = 'factor-status-pill danger';
+      phoneText = 'ATTENTION NEEDED';
+      phoneClass = 'factor-status-pill danger';
+      yawningText = 'N/A';
+      yawningClass = 'factor-status-pill danger';
+      laneText = '0% Match';
+      laneClass = 'factor-status-pill danger';
+      voiceAlertText = '"Alert: No driver detected in seat. Active safety assist engaged."';
+    } else if (faceCenterX < 0.38) {
       gaze = 'Gaze Left (Mirror)';
       gazeColor = 'var(--color-primary)';
+      currentScore = 74;
+      scoreText = 'Gaze Distraction Alert';
+      scoreColor = 'var(--color-warning)';
+      circleClass = 'circle-bar warning';
+      drowsinessText = 'DISTRACTED';
+      drowsinessClass = 'factor-status-pill warning';
+      laneText = '88% Match';
+      voiceAlertText = '"Attention: Gaze directed away from forward road center."';
     } else if (faceCenterX > 0.62) {
-      gaze = 'Gaze Right (Mirror)';
+      gaze = 'Gaze Right (Side)';
       gazeColor = 'var(--color-primary)';
+      currentScore = 72;
+      scoreText = 'Gaze Distraction Alert';
+      scoreColor = 'var(--color-warning)';
+      circleClass = 'circle-bar warning';
+      drowsinessText = 'DISTRACTED';
+      drowsinessClass = 'factor-status-pill warning';
+      laneText = '86% Match';
+      voiceAlertText = '"Attention: Head turned right away from forward path."';
+    } else if (faceCenterY > 0.58) {
+      gaze = 'Looking Down (Head Tilt)';
+      gazeColor = 'var(--color-danger)';
+      currentScore = 54;
+      scoreText = 'Drowsiness Warning Level 3';
+      scoreColor = 'var(--color-danger)';
+      circleClass = 'circle-bar danger';
+      drowsinessText = 'DROWSY';
+      drowsinessClass = 'factor-status-pill danger';
+      phoneText = 'CHECKING PHONE';
+      phoneClass = 'factor-status-pill warning';
+      yawningText = '3 / hr';
+      yawningClass = 'factor-status-pill warning';
+      laneText = '78% Match';
+      laneClass = 'factor-status-pill warning';
+      voiceAlertText = '"Warning: Head tilt / low gaze detected. Drowsiness threshold reached."';
     }
 
-    // Update real-time HUD UI elements
+    // Sync AppState with live telemetry
+    AppState.biometrics.score = currentScore;
+
+    // Update real-time HUD UI elements & score circular gauge
     const bioGazeEl = document.getElementById('bio-gaze');
+    const scoreValEl = document.getElementById('driver-score-val');
+    const scoreCircleEl = document.getElementById('driver-score-circle');
+    const scoreLabelEl = document.getElementById('driver-score-label');
+    const drowsinessEl = document.getElementById('bio-drowsiness');
+    const phoneEl = document.getElementById('bio-phone');
+    const yawningEl = document.getElementById('bio-yawning');
+    const laneEl = document.getElementById('bio-lane');
+    const voiceAlertEl = document.getElementById('driver-voice-alert');
+
     if (bioGazeEl) {
       bioGazeEl.textContent = gaze;
       bioGazeEl.style.color = gazeColor;
+    }
+    if (scoreValEl) {
+      scoreValEl.textContent = currentScore;
+    }
+    if (scoreLabelEl) {
+      scoreLabelEl.textContent = scoreText;
+      scoreLabelEl.style.color = scoreColor;
+    }
+    if (scoreCircleEl) {
+      scoreCircleEl.className = circleClass;
+      const scoreFraction = currentScore / 100;
+      const strokeOffset = 389 - (389 * scoreFraction);
+      scoreCircleEl.style.strokeDashoffset = strokeOffset;
+    }
+    if (drowsinessEl) {
+      drowsinessEl.textContent = drowsinessText;
+      drowsinessEl.className = drowsinessClass;
+    }
+    if (phoneEl) {
+      phoneEl.textContent = phoneText;
+      phoneEl.className = phoneClass;
+    }
+    if (yawningEl) {
+      yawningEl.textContent = yawningText;
+      yawningEl.className = yawningClass;
+    }
+    if (laneEl) {
+      laneEl.textContent = laneText;
+      laneEl.className = laneClass;
+    }
+    if (voiceAlertEl) {
+      voiceAlertEl.textContent = voiceAlertText;
     }
 
     // 2. Draw Futuristic Cybernetic HUD Overlay on Canvas
@@ -809,6 +919,11 @@ function startRealtimeFaceTracker() {
 }
 
 function startDriverMonitoringSimulation() {
+  // Auto-engage live webcam if not already live
+  if (!AppState.webcam.isLive) {
+    toggleLiveWebcam();
+  }
+
   if (AppState.biometrics.intervalId) return;
   
   const blinkEl = document.getElementById('bio-blink');
@@ -836,26 +951,24 @@ function startDriverMonitoringSimulation() {
       if (blinkEl) blinkEl.textContent = `${blink} / min`;
       if (closureEl) closureEl.textContent = `${closure}s (Normal)`;
       if (gazeEl) gazeEl.textContent = gaze;
+
+      if (AppState.biometrics.score > 85) {
+        if (drowsinessPill) {
+          drowsinessPill.textContent = 'ALERT';
+          drowsinessPill.className = 'factor-status-pill success';
+        }
+        if (scoreLabel) {
+          scoreLabel.textContent = 'Driver Fully Alert';
+          scoreLabel.style.color = 'var(--color-success)';
+        }
+        if (scoreCircle) {
+          scoreCircle.className = 'circle-bar success';
+          const scoreFraction = AppState.biometrics.score / 100;
+          const strokeOffset = 389 - (389 * scoreFraction);
+          scoreCircle.style.strokeDashoffset = strokeOffset;
+        }
+      }
     }
-    
-    // Standard status updating
-    if (AppState.biometrics.score > 85) {
-      if (drowsinessPill) {
-        drowsinessPill.textContent = 'ALERT';
-        drowsinessPill.className = 'factor-status-pill success';
-      }
-      if (scoreLabel) {
-        scoreLabel.textContent = 'Driver Fully Alert';
-        scoreLabel.style.color = 'var(--color-success)';
-      }
-      if (scoreCircle) {
-        scoreCircle.className = 'circle-bar success';
-        const scoreFraction = AppState.biometrics.score / 100;
-        const strokeOffset = 389 - (389 * scoreFraction);
-        scoreCircle.style.strokeDashoffset = strokeOffset;
-      }
-    }
-    
   }, 3000);
 }
 
