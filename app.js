@@ -1634,6 +1634,9 @@ async function toggleLiveWebcam() {
     if (AppState.webcam.stream) {
       AppState.webcam.stream.getTracks().forEach(track => track.stop());
     }
+    AppState.webcam.processVideo = false;
+    clearTimeout(AppState.webcam.simTimeout);
+    
     AppState.webcam.isLive = false;
     videoElement.style.display = 'none';
     fallbackImg.style.display = 'block';
@@ -1767,11 +1770,13 @@ async function handleVideoUpload(event) {
   const scoreLabel = document.getElementById('driver-score-label');
   const scoreCircle = document.getElementById('driver-score-circle');
 
-  // Stop any existing webcam stream
+  // Stop any existing webcam stream or video processing
   if (AppState.webcam.stream) {
     AppState.webcam.stream.getTracks().forEach(track => track.stop());
     AppState.webcam.stream = null;
   }
+  AppState.webcam.processVideo = false;
+  clearTimeout(AppState.webcam.simTimeout);
   AppState.webcam.isLive = true; // Treating uploaded video as 'live' for UI toggle purposes
 
   const videoUrl = URL.createObjectURL(file);
@@ -1824,18 +1829,30 @@ async function handleVideoUpload(event) {
         canvasCtx.fill();
       }
       
-      const attentiveness = 95 + Math.floor(Math.random() * 4);
-      scoreVal.textContent = attentiveness;
-      scoreLabel.textContent = 'Driver Fully Alert';
-      scoreLabel.style.color = 'var(--color-success)';
+      let attentiveness = 95 + Math.floor(Math.random() * 4);
+      if (AppState.webcam.forceDistraction) {
+        attentiveness = 25 + Math.floor(Math.random() * 10);
+        canvasCtx.fillStyle = '#ef4444'; // Red tracking mesh during emergency
+        for (let i = 0; i < landmarks.length; i+=3) {
+          const x = landmarks[i].x * canvasElement.width;
+          const y = landmarks[i].y * canvasElement.height;
+          canvasCtx.beginPath();
+          canvasCtx.arc(x, y, 1.5, 0, 2 * Math.PI);
+          canvasCtx.fill();
+        }
+      }
       
-      scoreCircle.classList.remove('warning', 'danger');
-      scoreCircle.classList.add('success');
+      scoreVal.textContent = attentiveness;
+      scoreLabel.textContent = AppState.webcam.forceDistraction ? 'CRITICAL DISTRACTION' : 'Driver Fully Alert';
+      scoreLabel.style.color = AppState.webcam.forceDistraction ? 'var(--color-danger)' : 'var(--color-success)';
+      
+      scoreCircle.classList.remove('warning', 'danger', 'success');
+      scoreCircle.classList.add(AppState.webcam.forceDistraction ? 'danger' : 'success');
       scoreCircle.style.strokeDashoffset = 389 - (389 * (attentiveness / 100));
       
       document.getElementById('bio-blink').textContent = (14 + Math.floor(Math.random() * 5)) + ' / min';
-      document.getElementById('bio-closure').textContent = '0.22s (Normal)';
-      document.getElementById('bio-gaze').textContent = 'Road Center';
+      document.getElementById('bio-closure').textContent = AppState.webcam.forceDistraction ? '2.10s (Danger)' : '0.22s (Normal)';
+      document.getElementById('bio-gaze').textContent = AppState.webcam.forceDistraction ? 'Off-road' : 'Road Center';
     } else {
       const score = 42;
       scoreVal.textContent = score;
@@ -1851,14 +1868,33 @@ async function handleVideoUpload(event) {
     canvasCtx.restore();
   });
 
-  const camera = new Camera(videoElement, {
-    onFrame: async () => {
+  // Handle processing without Camera utility for static video files
+  AppState.webcam.processVideo = true;
+  AppState.webcam.forceDistraction = false;
+  
+  videoElement.onplay = () => {
+    async function step() {
+      if (!AppState.webcam.processVideo || videoElement.paused || videoElement.ended) return;
       await faceMesh.send({image: videoElement});
-    },
-    width: 640,
-    height: 480
-  });
-  camera.start();
+      requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  };
+  
+  // Simulate distraction after 5 seconds of video playback
+  clearTimeout(AppState.webcam.simTimeout);
+  AppState.webcam.simTimeout = setTimeout(() => {
+    if (AppState.webcam.isLive && AppState.webcam.processVideo) {
+      AppState.webcam.forceDistraction = true;
+      speakText("Warning! Critical driver distraction detected. Please pull over immediately!");
+      
+      const grid = document.querySelector('.driver-monitoring-grid');
+      if (grid) {
+        grid.style.boxShadow = "inset 0 0 80px rgba(220, 38, 38, 0.4)";
+        setTimeout(() => { grid.style.boxShadow = "none"; }, 4000);
+      }
+    }
+  }, 5000);
   
   // Play the video explicitly
   videoElement.play().catch(e => console.log("Video auto-play prevented:", e));
