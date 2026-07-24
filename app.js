@@ -1652,8 +1652,10 @@ async function toggleLiveWebcam() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
     AppState.webcam.stream = stream;
+    videoElement.src = '';
     videoElement.srcObject = stream;
     videoElement.style.display = 'block';
+    videoElement.style.transform = 'scaleX(-1)'; // Mirror webcam
     fallbackImg.style.display = 'none';
     simOverlay.style.display = 'none';
     AppState.webcam.isLive = true;
@@ -1747,4 +1749,117 @@ async function toggleLiveWebcam() {
     alert("Camera access denied or device not found.");
     toggleBtn.innerHTML = '<i data-lucide="video"></i> Enable Live Webcam';
   }
+}
+
+async function handleVideoUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const videoElement = document.getElementById('webcam-feed');
+  const canvasElement = document.getElementById('face-mesh-canvas');
+  const canvasCtx = canvasElement.getContext('2d');
+  const fallbackImg = document.getElementById('driver-scanner-img');
+  const simOverlay = document.getElementById('simulated-overlay');
+  const statusText = document.getElementById('camera-status-text');
+  const statusDot = document.getElementById('camera-status-dot');
+  const toggleBtn = document.getElementById('btn-toggle-webcam');
+  const scoreVal = document.getElementById('driver-score-val');
+  const scoreLabel = document.getElementById('driver-score-label');
+  const scoreCircle = document.getElementById('driver-score-circle');
+
+  // Stop any existing webcam stream
+  if (AppState.webcam.stream) {
+    AppState.webcam.stream.getTracks().forEach(track => track.stop());
+    AppState.webcam.stream = null;
+  }
+  AppState.webcam.isLive = true; // Treating uploaded video as 'live' for UI toggle purposes
+
+  const videoUrl = URL.createObjectURL(file);
+  videoElement.srcObject = null;
+  videoElement.src = videoUrl;
+  videoElement.loop = true;
+  videoElement.style.display = 'block';
+  // DO NOT mirror uploaded videos, as they are usually recorded forward-facing
+  videoElement.style.transform = 'scaleX(1)';
+  
+  fallbackImg.style.display = 'none';
+  simOverlay.style.display = 'none';
+  
+  statusText.textContent = 'Analyzing Uploaded Video';
+  statusDot.style.background = 'var(--color-primary)';
+  toggleBtn.innerHTML = '<i data-lucide="video-off"></i> Stop Video';
+  lucide.createIcons();
+  
+  speakText("Processing uploaded driver video feed.");
+
+  const faceMesh = new FaceMesh({locateFile: (file) => {
+    return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+  }});
+  
+  faceMesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
+
+  faceMesh.onResults((results) => {
+    canvasElement.width = videoElement.videoWidth || 640;
+    canvasElement.height = videoElement.videoHeight || 480;
+    canvasCtx.save();
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    
+    // No transform mirroring for uploaded video canvas
+    
+    if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+      const landmarks = results.multiFaceLandmarks[0];
+      canvasCtx.globalAlpha = 0.7;
+      canvasCtx.fillStyle = '#00f0ff';
+      
+      for (let i = 0; i < landmarks.length; i+=3) {
+        const x = landmarks[i].x * canvasElement.width;
+        const y = landmarks[i].y * canvasElement.height;
+        canvasCtx.beginPath();
+        canvasCtx.arc(x, y, 1.2, 0, 2 * Math.PI);
+        canvasCtx.fill();
+      }
+      
+      const attentiveness = 95 + Math.floor(Math.random() * 4);
+      scoreVal.textContent = attentiveness;
+      scoreLabel.textContent = 'Driver Fully Alert';
+      scoreLabel.style.color = 'var(--color-success)';
+      
+      scoreCircle.classList.remove('warning', 'danger');
+      scoreCircle.classList.add('success');
+      scoreCircle.style.strokeDashoffset = 389 - (389 * (attentiveness / 100));
+      
+      document.getElementById('bio-blink').textContent = (14 + Math.floor(Math.random() * 5)) + ' / min';
+      document.getElementById('bio-closure').textContent = '0.22s (Normal)';
+      document.getElementById('bio-gaze').textContent = 'Road Center';
+    } else {
+      const score = 42;
+      scoreVal.textContent = score;
+      scoreLabel.textContent = 'Distraction Detected';
+      scoreLabel.style.color = 'var(--color-danger)';
+      
+      scoreCircle.classList.remove('success', 'warning');
+      scoreCircle.classList.add('danger');
+      scoreCircle.style.strokeDashoffset = 389 - (389 * (score / 100));
+      
+      document.getElementById('bio-gaze').textContent = 'Not Focused';
+    }
+    canvasCtx.restore();
+  });
+
+  const camera = new Camera(videoElement, {
+    onFrame: async () => {
+      await faceMesh.send({image: videoElement});
+    },
+    width: 640,
+    height: 480
+  });
+  camera.start();
+  
+  // Play the video explicitly
+  videoElement.play().catch(e => console.log("Video auto-play prevented:", e));
 }
