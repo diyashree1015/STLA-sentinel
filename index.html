@@ -22,10 +22,6 @@
   <!-- Font Awesome for secondary icon sets if needed (Lucide is primary) -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
-  <!-- MediaPipe Face Mesh & Camera Utils -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
-  
   <!-- Custom Styling -->
   <link rel="stylesheet" href="style.css">
 </head>
@@ -245,8 +241,8 @@
                 <div class="widget-title">
                   <i data-lucide="map-pin"></i> Current Location
                 </div>
-                <div class="stat-value" id="dash-location" style="font-size: 20px; line-height: 1.3;">Woodward Ave, Detroit</div>
-                <div class="stat-sub">GPS: 42.3314° N, 83.0458° W</div>
+                <div class="stat-value" id="dash-location" style="font-size: 20px; line-height: 1.3;">REVA University, Bengaluru</div>
+                <div class="stat-sub" id="dash-gps-sub">GPS: 12.9716° N, 77.5946° E</div>
               </div>
               
               <!-- Weather Card -->
@@ -396,7 +392,7 @@
               <!-- AI Core Recommendations -->
               <div class="glass-card">
                 <div class="widget-title"><i data-lucide="cpu"></i> Active AI Assistant Guidance</div>
-                <div style="display: flex; flex-direction: column; gap: 16px; margin-top: 12px;">
+                <div style="display: flex; flex-direction: column; gap: 16px; margin-top: 12px;" id="ai-recommendation-list">
                   <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--glass-border); padding: 12px; border-radius: 12px; font-size: 13px;">
                     <div style="color: var(--color-primary); font-weight: 600; margin-bottom: 4px;">Slippery Roads Detected</div>
                     <span style="color: var(--text-secondary);">Rainfall density has increased. Recommend maintaining a safety gap of 4 seconds from leading vehicles.</span>
@@ -431,6 +427,66 @@
               
             </div>
 
+            <!-- Environmental Intelligence / Trip Scores / Near-Miss AI -->
+            <div class="dashboard-row-3" id="dashboard-row-4" style="margin-top: 20px;">
+
+              <!-- Environmental Intelligence Panel -->
+              <div class="glass-card" id="environment-panel">
+                <div class="widget-title"><i data-lucide="cloud-sun"></i> Environmental Intelligence</div>
+                <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 12px; font-size: 13px;">
+                  <div style="display:flex; justify-content:space-between;"><span style="color: var(--text-secondary);">Temperature</span><span id="env-temp" style="font-weight:600;">--</span></div>
+                  <div style="display:flex; justify-content:space-between;"><span style="color: var(--text-secondary);">Condition</span><span id="env-condition" style="font-weight:600;">--</span></div>
+                  <div style="display:flex; justify-content:space-between;"><span style="color: var(--text-secondary);">Visibility</span><span id="env-visibility" style="font-weight:600;">--</span></div>
+                  <div style="display:flex; justify-content:space-between;"><span style="color: var(--text-secondary);">Wind Speed</span><span id="env-wind" style="font-weight:600;">--</span></div>
+                  <div style="display:flex; justify-content:space-between;"><span style="color: var(--text-secondary);">Rain</span><span id="env-rain" style="font-weight:600;">--</span></div>
+                  <div style="display:flex; justify-content:space-between;"><span style="color: var(--text-secondary);">Humidity</span><span id="env-humidity" style="font-weight:600;">--</span></div>
+                  <div style="display:flex; justify-content:space-between;"><span style="color: var(--text-secondary);">Road Traction</span><span id="env-traction" style="font-weight:600;">--</span></div>
+                  <div style="display:flex; justify-content:space-between;"><span style="color: var(--text-secondary);">Sun Glare</span><span id="env-glare" style="font-weight:600;">--</span></div>
+                  <div style="display:flex; justify-content:space-between;"><span style="color: var(--text-secondary);">Night Mode</span><span id="env-night" style="font-weight:600;">--</span></div>
+                </div>
+                <div style="margin-top: 14px; padding: 10px 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--glass-border); border-radius: 12px; font-size: 12px; color: var(--color-primary); font-weight: 600;" id="env-recommendation">
+                  Fetching live environmental telemetry...
+                </div>
+              </div>
+
+              <!-- Trip / Composite Safety Scores -->
+              <div class="glass-card" id="trip-scores-panel">
+                <div class="widget-title"><i data-lucide="gauge"></i> Composite Safety Scores</div>
+                <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 14px;">
+                  <div>
+                    <div style="display:flex; justify-content:space-between; font-size: 13px; margin-bottom:4px;"><span>Driver Score</span><span id="score-driver-val" style="font-weight:700;">95</span></div>
+                    <div style="background: rgba(255,255,255,0.05); height: 6px; border-radius: 3px; overflow:hidden;"><div id="score-driver-bar" style="background: var(--color-success); width: 95%; height:100%;"></div></div>
+                  </div>
+                  <div>
+                    <div style="display:flex; justify-content:space-between; font-size: 13px; margin-bottom:4px;"><span>Environmental Score</span><span id="score-env-val" style="font-weight:700;">80</span></div>
+                    <div style="background: rgba(255,255,255,0.05); height: 6px; border-radius: 3px; overflow:hidden;"><div id="score-env-bar" style="background: var(--color-success); width: 80%; height:100%;"></div></div>
+                  </div>
+                  <div>
+                    <div style="display:flex; justify-content:space-between; font-size: 13px; margin-bottom:4px;"><span>Road Score</span><span id="score-road-val" style="font-weight:700;">78</span></div>
+                    <div style="background: rgba(255,255,255,0.05); height: 6px; border-radius: 3px; overflow:hidden;"><div id="score-road-bar" style="background: var(--color-warning); width: 78%; height:100%;"></div></div>
+                  </div>
+                  <div>
+                    <div style="display:flex; justify-content:space-between; font-size: 13px; margin-bottom:4px;"><span>Trip Score</span><span id="score-trip-val" style="font-weight:700;">88</span></div>
+                    <div style="background: rgba(255,255,255,0.05); height: 6px; border-radius: 3px; overflow:hidden;"><div id="score-trip-bar" style="background: var(--color-success); width: 88%; height:100%;"></div></div>
+                  </div>
+                  <div style="border-top: 1px solid var(--glass-border); padding-top: 10px;">
+                    <div style="display:flex; justify-content:space-between; font-size: 14px; margin-bottom:4px;"><strong>Overall Safety Score</strong><span id="score-overall-val" style="font-weight:800; color: var(--color-primary);">86</span></div>
+                    <div style="background: rgba(255,255,255,0.05); height: 8px; border-radius: 4px; overflow:hidden;"><div id="score-overall-bar" style="background: var(--color-primary); width: 86%; height:100%;"></div></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Near-Miss AI Event Log -->
+              <div class="glass-card" id="near-miss-panel">
+                <div class="widget-title"><i data-lucide="radar"></i> Near-Miss AI Event Tracker</div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin: 8px 0 12px;">Monitoring sudden braking, lane drift, harsh steering, overspeed & phone use.</div>
+                <div id="near-miss-list" style="display:flex; flex-direction:column; gap:8px; max-height: 180px; overflow-y:auto;">
+                  <div style="font-size:12px; color: var(--text-muted);">No near-miss events recorded this trip.</div>
+                </div>
+              </div>
+
+            </div>
+
           </div>
         </section>
 
@@ -449,7 +505,7 @@
               
               <div class="form-group" style="margin-bottom: 0;">
                 <label class="form-label">Destination</label>
-                <input type="text" id="nav-destination-input" class="form-input" value="Detroit Metropolitan Airport (DTW)" style="padding: 10px;">
+                <input type="text" id="nav-destination-input" class="form-input" value="Kempegowda International Airport (BLR)" style="padding: 10px;">
               </div>
               
               <!-- Route options selector -->
@@ -458,29 +514,29 @@
                 
                 <div class="route-card selected" id="route-safest" onclick="selectRoute('safest')">
                   <div class="route-header">
-                    <span class="route-name">Woodward Safe-Link</span>
+                    <span class="route-name">Outer Ring Road Safe-Link</span>
                     <span class="route-tag safest">Safest Route</span>
                   </div>
                   <div class="route-meta">
-                    <span><i data-lucide="clock" style="width: 12px;"></i> 24 mins</span>
-                    <span><i data-lucide="route" style="width: 12px;"></i> 12.8 miles</span>
+                    <span><i data-lucide="clock" style="width: 12px;"></i> 42 mins</span>
+                    <span><i data-lucide="route" style="width: 12px;"></i> 34.6 km</span>
                   </div>
                   <div style="font-size: 11px; color: var(--color-success); margin-top: 6px; font-weight: 500;">
-                    Risk Factor: 10% (Avoids waterlogged zone)
+                    Risk Factor: 12% (Avoids Silk Board & Marathahalli congestion)
                   </div>
                 </div>
                 
                 <div class="route-card" id="route-fastest" onclick="selectRoute('fastest')">
                   <div class="route-header">
-                    <span class="route-name">I-75 South Express</span>
+                    <span class="route-name">Hebbal-Silk Board Express</span>
                     <span class="route-tag fastest">Fastest Route</span>
                   </div>
                   <div class="route-meta">
-                    <span><i data-lucide="clock" style="width: 12px;"></i> 21 mins</span>
-                    <span><i data-lucide="route" style="width: 12px;"></i> 14.1 miles</span>
+                    <span><i data-lucide="clock" style="width: 12px;"></i> 36 mins</span>
+                    <span><i data-lucide="route" style="width: 12px;"></i> 31.2 km</span>
                   </div>
                   <div style="font-size: 11px; color: var(--color-warning); margin-top: 6px; font-weight: 500;">
-                    Risk Factor: 65% (Heavy traffic & construction)
+                    Risk Factor: 62% (Silk Board jam & Hebbal accident zone)
                   </div>
                 </div>
               </div>
@@ -504,7 +560,7 @@
                   <span>SentinelAI Co-Driver</span>
                 </div>
                 <div class="ai-assistant-bubble" id="nav-assistant-prompt">
-                  "Heavy rain detected. Safest route selected to avoid standing water on Jefferson Ave. Maintain present speed limit."
+                  "Live traffic and weather analyzed. Safest route selected via Outer Ring Road to avoid Silk Board congestion. Maintain present speed limit."
                 </div>
               </div>
               
@@ -534,15 +590,14 @@
                 <span id="camera-status-text">Simulated Stream</span>
               </div>
               
-              <div style="position: absolute; top: 16px; right: 16px; z-index: 30; display: flex; gap: 8px;">
-                <input type="file" id="video-upload" accept="video/*" style="display: none;" onchange="handleVideoUpload(event)">
-                <button id="btn-upload-video" class="btn btn-secondary" onclick="document.getElementById('video-upload').click()" style="padding: 6px 12px; font-size: 11px;">
-                  <i data-lucide="upload-cloud"></i> Upload Video
-                </button>
-                <button id="btn-toggle-webcam" class="btn btn-secondary" onclick="toggleLiveWebcam()" style="padding: 6px 12px; font-size: 11px;">
-                  <i data-lucide="video"></i> Enable Live Webcam
-                </button>
-              </div>
+              <button id="btn-toggle-webcam" class="btn btn-secondary" onclick="toggleLiveWebcam()" style="position: absolute; top: 16px; right: 16px; z-index: 30; padding: 6px 12px; font-size: 11px;">
+                <i data-lucide="video"></i> Enable Live Webcam
+              </button>
+
+              <label for="video-upload-input" class="btn btn-secondary" style="position: absolute; top: 16px; right: 190px; z-index: 30; padding: 6px 12px; font-size: 11px; cursor: pointer;">
+                <i data-lucide="upload"></i> Upload Video
+              </label>
+              <input type="file" id="video-upload-input" accept="video/*" style="display:none;" onchange="handleVideoUpload(event)">
               
               <!-- Live Video Feed -->
               <video id="webcam-feed" autoplay playsinline muted style="display: none; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1);"></video>
@@ -1373,6 +1428,8 @@
   <script src="https://unpkg.com/lucide@latest"></script>
   <!-- Leaflet Interactive Maps JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
   <!-- ChartJS Analytics -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <!-- Application Interactivity Javascript -->

@@ -1,4 +1,79 @@
-// --- STATE MANAGEMENT ---
+/* ============================================================================
+   SENTINELAI :: AI MOBILITY SAFETY ECOSYSTEM
+   Stellantis Hackathon 2026 — STLA-SENTINEL
+   Single-file ES6 application logic. Preserves original UI/CSS/animations.
+   ========================================================================== */
+
+// ============================================================================
+// SECTION 0: GLOBAL CONFIG & CONSTANTS
+// ============================================================================
+
+// OpenWeather placeholder — replace with a real key to enable live weather.
+const WEATHER_API_KEY = "YOUR_API_KEY";
+const WEATHER_LAT = 12.9716;
+const WEATHER_LON = 77.5946;
+const WEATHER_ENDPOINT = `https://api.openweathermap.org/data/2.5/weather?lat=${WEATHER_LAT}&lon=${WEATHER_LON}&units=metric&appid=${WEATHER_API_KEY}`;
+
+// Bangalore map center (REVA University area)
+const BLR_CENTER = [12.9716, 77.5946];
+const MapTileURL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+const MapAttrib = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+
+// Demo navigation route: REVA University -> Kempegowda International Airport
+const ROUTE_REVA_TO_AIRPORT = [
+  [13.0053, 77.6141], // REVA University, Kattigenahalli
+  [13.0180, 77.6210],
+  [13.0350, 77.6280],
+  [13.0520, 77.6350],
+  [13.0700, 77.6450],
+  [13.0870, 77.6520],
+  [13.1050, 77.6480],
+  [13.1230, 77.6420],
+  [13.1500, 77.6480],
+  [13.1979, 77.7060]  // Kempegowda International Airport
+];
+
+// Alternate ("fastest", congested) route via Hebbal
+const ROUTE_REVA_TO_AIRPORT_FAST = [
+  [13.0053, 77.6141],
+  [13.0250, 77.6050],
+  [13.0450, 77.6050],
+  [13.0650, 77.6150],
+  [13.0850, 77.6300],
+  [13.1050, 77.6450],
+  [13.1300, 77.6550],
+  [13.1979, 77.7060]
+];
+
+// Road hazard dataset — Bangalore hotspots
+const BLR_HAZARDS = [
+  { id: 1, lat: 12.9172, lng: 77.6228, type: 'pothole',      severity: 'Warning',  label: 'Silk Board Junction — deep pothole cluster', risk: 62, recommendation: 'Reduce speed, keep to right lane.', time: '8 mins ago' },
+  { id: 2, lat: 13.0358, lng: 77.5970, type: 'accident',     severity: 'Critical', label: 'Hebbal Flyover — reported accident, lane blocked', risk: 88, recommendation: 'Avoid corridor, use Outer Ring Road detour.', time: '4 mins ago' },
+  { id: 3, lat: 12.9698, lng: 77.7500, type: 'waterlogging', severity: 'High',     label: 'Whitefield — waterlogged underpass', risk: 70, recommendation: 'Reduce speed, avoid underpass if flooded > 15cm.', time: '12 mins ago' },
+  { id: 4, lat: 12.8452, lng: 77.6602, type: 'traffic',      severity: 'High',     label: 'Electronic City — heavy congestion, stop-and-go', risk: 55, recommendation: 'Increase following distance, expect delays.', time: '2 mins ago' },
+  { id: 5, lat: 12.9591, lng: 77.6974, type: 'construction', severity: 'Warning',  label: 'Marathahalli Bridge — active lane construction', risk: 58, recommendation: 'Merge early, reduce speed to 30 km/h.', time: '20 mins ago' },
+  { id: 6, lat: 12.9352, lng: 77.6245, type: 'signal',       severity: 'Warning',  label: 'Koramangala — broken traffic signal', risk: 48, recommendation: 'Treat as 4-way stop, proceed with caution.', time: '15 mins ago' }
+];
+
+const HAZARD_ICONS = {
+  pothole: 'alert-triangle',
+  accident: 'car-front',
+  waterlogging: 'waves',
+  traffic: 'gauge',
+  construction: 'construction',
+  signal: 'traffic-cone'
+};
+
+const SEVERITY_COLOR = {
+  Critical: '#ef4444',
+  High: '#f59e0b',
+  Warning: '#f59e0b',
+  Low: '#22c55e'
+};
+
+// ============================================================================
+// SECTION 1: APPLICATION STATE
+// ============================================================================
 const AppState = {
   user: {
     authenticated: false,
@@ -23,7 +98,9 @@ const AppState = {
     currentSpeed: 45,
     intervalId: null,
     stepIndex: 0,
-    routeCoords: []
+    routeCoords: [],
+    safestCoords: null,
+    fastestCoords: null
   },
   biometrics: {
     blinkRate: 18,
@@ -35,6 +112,8 @@ const AppState = {
     phoneDistraction: false,
     yawning: 0,
     laneKeeping: 98,
+    headPose: 'Centered',
+    aggressiveSteering: false,
     intervalId: null
   },
   webcam: {
@@ -47,6 +126,39 @@ const AppState = {
     lastBlink: Date.now(),
     detector: null
   },
+  environment: {
+    tempC: 27,
+    condition: 'Clear',
+    visibilityM: 9000,
+    windKph: 9,
+    rainMm: 0,
+    humidity: 55,
+    clouds: 20,
+    isNight: false,
+    lastFetch: 0
+  },
+  risk: {
+    driver: 10,
+    weather: 20,
+    road: 25,
+    traffic: 30,
+    time: 10,
+    overall: 0,
+    category: 'Safe'
+  },
+  tripScores: {
+    driver: 95,
+    environmental: 80,
+    road: 78,
+    trip: 88,
+    overall: 86,
+    startTime: Date.now(),
+    distanceKm: 0
+  },
+  nearMiss: {
+    events: [],
+    maxEvents: 25
+  },
   emergency: {
     countdown: 10,
     isSOSActive: false,
@@ -55,11 +167,7 @@ const AppState = {
     ambulanceMarker: null,
     map: null
   },
-  hazards: [
-    { id: 1, lat: 42.3414, lng: -83.0558, type: 'pothole', severity: 'Warning', label: 'Woodward Ave deep pothole, left lane', time: '10 mins ago', img: 'assets/road_hazard.png' },
-    { id: 2, lat: 42.3250, lng: -83.0300, type: 'waterlogging', severity: 'Critical', label: 'Jefferson Ave flooded intersection', time: '5 mins ago', img: 'assets/road_hazard.png' },
-    { id: 3, lat: 42.3550, lng: -83.0600, type: 'construction', severity: 'High', label: 'I-75 lane closure for bridge work', time: '30 mins ago', img: 'assets/road_hazard.png' }
-  ],
+  hazards: BLR_HAZARDS.slice(),
   maps: {
     dashboard: null,
     safeDrive: null,
@@ -70,26 +178,452 @@ const AppState = {
     bar: null,
     line: null,
     pie: null
+  },
+  intervals: {
+    riskEngine: null,
+    tripScoreEngine: null,
+    recommendationEngine: null,
+    environmentPoll: null,
+    nearMissWatcher: null
   }
 };
 
-// Map Tile Service Layer (CartoDB Dark Matter for futuristic UI)
-const MapTileURL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-const MapAttrib = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+// ============================================================================
+// SECTION 2: AI PLACEHOLDER MODULES (browser cannot run YOLO/MediaPipe
+// directly — these functions simulate realistic confidence outputs and are
+// structured so real model inference can be swapped in without UI changes)
+// ============================================================================
+class DriverAI {
+  // YOLO placeholder — seatbelt detection
+  static detectSeatbelt() {
+    const confidence = 0.9 + Math.random() * 0.09;
+    const buckled = Math.random() > 0.04; // rare unbuckled event
+    return { buckled, confidence: Number(confidence.toFixed(2)) };
+  }
+
+  // MediaPipe FaceMesh placeholder — eye aspect ratio / closure
+  static detectEyeClosure() {
+    const ear = 0.22 + Math.random() * 0.10; // eye aspect ratio proxy
+    const closed = ear < 0.18;
+    return { earValue: Number(ear.toFixed(2)), closed, confidence: Number((0.85 + Math.random() * 0.12).toFixed(2)) };
+  }
+
+  static detectBlinkRate() {
+    return { blinksPerMinute: Math.floor(Math.random() * 8) + 14, confidence: 0.9 };
+  }
+
+  static detectYawning() {
+    const mouthAspectRatio = Math.random();
+    const yawning = mouthAspectRatio > 0.93;
+    return { yawning, confidence: Number((0.8 + Math.random() * 0.15).toFixed(2)) };
+  }
+
+  // Placeholder object-detection model for phone-in-hand
+  static detectPhone() {
+    const phoneDetected = Math.random() > 0.9;
+    return { phoneDetected, confidence: Number((0.75 + Math.random() * 0.2).toFixed(2)) };
+  }
+
+  // Head pose estimation placeholder (yaw/pitch/roll)
+  static detectHeadPose() {
+    const yaw = (Math.random() - 0.5) * 40;   // degrees
+    const pitch = (Math.random() - 0.5) * 25;
+    let pose = 'Centered';
+    if (yaw > 15) pose = 'Turned Right';
+    else if (yaw < -15) pose = 'Turned Left';
+    else if (pitch > 12) pose = 'Looking Down';
+    return { yaw: Number(yaw.toFixed(1)), pitch: Number(pitch.toFixed(1)), pose, confidence: 0.88 };
+  }
+
+  static detectLaneDeparture() {
+    const laneScore = Math.floor(Math.random() * 15) + 84; // 84-99%
+    return { laneKeepingScore: laneScore, departing: laneScore < 88, confidence: 0.9 };
+  }
+
+  static detectAggressiveSteering() {
+    const steeringAngleRate = Math.random() * 60; // deg/sec proxy
+    return { aggressive: steeringAngleRate > 45, angleRate: Number(steeringAngleRate.toFixed(1)) };
+  }
+
+  // Composite fatigue model combining eye closure + blink + yawning
+  static detectFatigue(eyeClosure, blink, yawn) {
+    let fatigueScore = 0;
+    if (eyeClosure.closed) fatigueScore += 40;
+    if (blink.blinksPerMinute < 12 || blink.blinksPerMinute > 24) fatigueScore += 15;
+    if (yawn.yawning) fatigueScore += 30;
+    fatigueScore += Math.random() * 10;
+    return { fatigueScore: Math.min(100, Math.round(fatigueScore)), confidence: 0.87 };
+  }
+
+  static detectDistraction(phone, headPose, gaze) {
+    let distractionScore = 0;
+    if (phone.phoneDetected) distractionScore += 45;
+    if (headPose.pose !== 'Centered') distractionScore += 25;
+    if (gaze !== 'Road Center') distractionScore += 20;
+    return { distractionScore: Math.min(100, Math.round(distractionScore)) };
+  }
+
+  // Aggregate 0-100 driver behaviour score
+  static computeDriverScore({ seatbelt, fatigue, distraction, lane }) {
+    let score = 100;
+    if (!seatbelt.buckled) score -= 25;
+    score -= fatigue.fatigueScore * 0.35;
+    score -= distraction.distractionScore * 0.25;
+    score -= (100 - lane.laneKeepingScore) * 0.5;
+    return Math.max(0, Math.min(100, Math.round(score)));
+  }
+}
+
+// ============================================================================
+// SECTION 3: ENVIRONMENTAL INTELLIGENCE (OpenWeather integration)
+// ============================================================================
+class EnvironmentAI {
+  static async fetchWeather() {
+    // Guard: if no real API key configured, fall back to a realistic
+    // simulated reading so the UI keeps functioning end-to-end.
+    if (!WEATHER_API_KEY || WEATHER_API_KEY === 'YOUR_API_KEY') {
+      return EnvironmentAI.simulateWeather();
+    }
+    try {
+      const res = await fetch(WEATHER_ENDPOINT);
+      if (!res.ok) throw new Error(`Weather API error: ${res.status}`);
+      const data = await res.json();
+      return {
+        tempC: data.main?.temp ?? 27,
+        condition: data.weather?.[0]?.main ?? 'Clear',
+        visibilityM: data.visibility ?? 9000,
+        windKph: (data.wind?.speed ?? 2.5) * 3.6,
+        rainMm: data.rain?.['1h'] ?? 0,
+        humidity: data.main?.humidity ?? 55,
+        clouds: data.clouds?.all ?? 20,
+        isNight: EnvironmentAI.isNightNow(data)
+      };
+    } catch (err) {
+      console.warn('Weather fetch failed, using simulated telemetry:', err);
+      return EnvironmentAI.simulateWeather();
+    }
+  }
+
+  static isNightNow(data) {
+    if (data?.sys?.sunrise && data?.sys?.sunset && data?.dt) {
+      return data.dt < data.sys.sunrise || data.dt > data.sys.sunset;
+    }
+    const hour = new Date().getHours();
+    return hour < 6 || hour >= 19;
+  }
+
+  // Realistic simulated fallback (no external key required for the demo)
+  static simulateWeather() {
+    const conditions = ['Clear', 'Clouds', 'Rain', 'Haze', 'Drizzle'];
+    const condition = conditions[Math.floor(Math.random() * conditions.length)];
+    const rainMm = condition === 'Rain' ? Number((Math.random() * 8 + 1).toFixed(1)) :
+                   condition === 'Drizzle' ? Number((Math.random() * 2).toFixed(1)) : 0;
+    const hour = new Date().getHours();
+    return {
+      tempC: Math.round(22 + Math.random() * 10),
+      condition,
+      visibilityM: condition === 'Haze' ? 2500 + Math.random() * 2000 : 8000 + Math.random() * 2000,
+      windKph: Math.round(8 + Math.random() * 20),
+      rainMm,
+      humidity: Math.round(45 + Math.random() * 40),
+      clouds: Math.round(Math.random() * 100),
+      isNight: hour < 6 || hour >= 19
+    };
+  }
+
+  static computeRoadTraction(env) {
+    let traction = 100;
+    if (env.rainMm > 0) traction -= Math.min(50, env.rainMm * 6);
+    if (env.condition === 'Haze') traction -= 10;
+    return Math.max(20, Math.round(traction));
+  }
+
+  static computeSunGlare(env) {
+    const hour = new Date().getHours();
+    const lowSunWindow = (hour >= 6 && hour <= 8) || (hour >= 17 && hour <= 19);
+    if (env.isNight) return 'None';
+    if (lowSunWindow && env.clouds < 40) return 'High';
+    if (lowSunWindow) return 'Moderate';
+    return 'Low';
+  }
+
+  static generateRecommendation(env) {
+    const recs = [];
+    if (env.rainMm > 3) recs.push('Heavy rain — reduce speed and increase braking distance.');
+    else if (env.rainMm > 0) recs.push('Light rain detected — moderate speed reduction advised.');
+    if (env.condition === 'Haze' || env.visibilityM < 3000) recs.push('Low visibility — turn on headlights and fog lamps.');
+    if (env.windKph > 25) recs.push('Strong crosswinds — hold the steering wheel firmly.');
+    if (env.visibilityM < 300) recs.push('Very low visibility — increase following distance significantly.');
+    if (env.isNight) recs.push('Night driving — night mode HUD engaged, watch for pedestrians.');
+    if (recs.length === 0) recs.push('Conditions nominal — standard safe driving practices apply.');
+    return recs.join(' ');
+  }
+}
+
+// ============================================================================
+// SECTION 4: AI RECOMMENDATION ENGINE
+// ============================================================================
+class RecommendationEngine {
+  static build(env, riskState, hazardsNearby) {
+    const messages = [];
+
+    if (env.rainMm > 3) messages.push({ type: 'danger', text: 'Heavy Rain Ahead — Reduce Speed' });
+    else if (env.rainMm > 0) messages.push({ type: 'warning', text: 'Rain Detected — Increase Following Distance' });
+
+    if (env.condition === 'Haze' || env.visibilityM < 3000) messages.push({ type: 'warning', text: 'Low Visibility — Turn On Headlights' });
+    if (env.windKph > 25) messages.push({ type: 'warning', text: 'Strong Wind — Hold Steering Firmly' });
+    if (env.isNight) messages.push({ type: 'info', text: 'Night Driving Mode Active' });
+
+    if (hazardsNearby && hazardsNearby.length > 0) {
+      messages.push({ type: 'danger', text: `Road Hazard Ahead — ${hazardsNearby[0].label}` });
+    }
+
+    if (riskState.category === 'High' || riskState.category === 'Critical') {
+      messages.push({ type: 'danger', text: 'Safer Route Available — Reroute Recommended' });
+    }
+
+    if (AppState.biometrics.score < 70) messages.push({ type: 'danger', text: 'Take a Break — Fatigue Signs Detected' });
+
+    // Occasional contextual reminders for demo realism
+    if (Math.random() < 0.08) messages.push({ type: 'info', text: 'School Zone Ahead — Reduce Speed' });
+    if (Math.random() < 0.05) messages.push({ type: 'warning', text: 'Animal Crossing Reported Nearby' });
+    if (Math.random() < 0.04) messages.push({ type: 'danger', text: 'Emergency Vehicle Nearby — Yield Right of Way' });
+
+    if (messages.length === 0) messages.push({ type: 'success', text: 'All Systems Nominal — Drive Safely' });
+
+    return messages.slice(0, 4);
+  }
+
+  static render() {
+    const container = document.getElementById('ai-recommendation-list');
+    if (!container) return;
+    const nearby = AppState.hazards.slice(0, 1);
+    const messages = RecommendationEngine.build(AppState.environment, AppState.risk, nearby);
+
+    const colorMap = {
+      danger: 'var(--color-danger)',
+      warning: 'var(--color-warning)',
+      info: 'var(--color-primary)',
+      success: 'var(--color-success)'
+    };
+
+    container.innerHTML = messages.map(m => `
+      <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--glass-border); padding: 12px; border-radius: 12px; font-size: 13px;">
+        <div style="color: ${colorMap[m.type]}; font-weight: 600; margin-bottom: 4px;">${m.text}</div>
+      </div>
+    `).join('');
+  }
+}
+
+// ============================================================================
+// SECTION 5: RISK PREDICTION ENGINE
+// Weighted formula: Driver 35% | Weather 20% | Road 20% | Traffic 15% | Time 10%
+// ============================================================================
+class RiskEngine {
+  static computeWeatherRisk(env) {
+    let risk = 0;
+    if (env.rainMm > 5) risk += 60;
+    else if (env.rainMm > 0) risk += 30;
+    if (env.condition === 'Haze' || env.visibilityM < 3000) risk += 25;
+    if (env.windKph > 25) risk += 15;
+    return Math.min(100, risk);
+  }
+
+  static computeRoadRisk(hazards) {
+    if (!hazards || hazards.length === 0) return 15;
+    const avg = hazards.reduce((sum, h) => sum + (h.risk || 40), 0) / hazards.length;
+    return Math.min(100, Math.round(avg));
+  }
+
+  static computeTrafficRisk() {
+    const hour = new Date().getHours();
+    const isPeak = (hour >= 8 && hour <= 10) || (hour >= 17 && hour <= 20);
+    return isPeak ? 70 + Math.round(Math.random() * 15) : 25 + Math.round(Math.random() * 20);
+  }
+
+  static computeTimeRisk(env) {
+    return env.isNight ? 60 : 20;
+  }
+
+  static computeDriverRisk() {
+    return Math.max(0, 100 - AppState.biometrics.score);
+  }
+
+  static computeOverallRisk() {
+    const driverRisk = RiskEngine.computeDriverRisk();
+    const weatherRisk = RiskEngine.computeWeatherRisk(AppState.environment);
+    const roadRisk = RiskEngine.computeRoadRisk(AppState.hazards);
+    const trafficRisk = RiskEngine.computeTrafficRisk();
+    const timeRisk = RiskEngine.computeTimeRisk(AppState.environment);
+
+    const overall = Math.round(
+      driverRisk * 0.35 +
+      weatherRisk * 0.20 +
+      roadRisk * 0.20 +
+      trafficRisk * 0.15 +
+      timeRisk * 0.10
+    );
+
+    let category = 'Safe';
+    if (overall > 75) category = 'Critical';
+    else if (overall > 50) category = 'High';
+    else if (overall > 25) category = 'Moderate';
+
+    AppState.risk = { driver: driverRisk, weather: weatherRisk, road: roadRisk, traffic: trafficRisk, time: timeRisk, overall, category };
+    return AppState.risk;
+  }
+
+  static renderRiskBreakdown() {
+    const r = AppState.risk;
+    const setFactor = (idPrefix, value) => {
+      const label = document.getElementById(`risk-factor-${idPrefix}`);
+      const fill = document.getElementById(`risk-fill-${idPrefix}`);
+      if (label) label.textContent = `${value}%`;
+      if (fill) {
+        fill.style.width = `${value}%`;
+        fill.className = `progress-fill ${value > 60 ? 'red' : value > 35 ? 'amber' : 'green'}`;
+      }
+    };
+    setFactor('weather', r.weather);
+    setFactor('traffic', r.traffic);
+    setFactor('road', r.road);
+    setFactor('driver', r.driver);
+    setFactor('visibility', Math.min(100, Math.round(100 - (AppState.environment.visibilityM / 100))));
+    setFactor('history', r.road); // reuse road/historical density proxy
+  }
+
+  static renderGauge() {
+    const gaugeBar = document.getElementById('risk-gauge-bar');
+    const gaugeVal = document.getElementById('risk-gauge-val');
+    const gaugeLabel = document.getElementById('risk-gauge-label');
+    if (!gaugeBar) return;
+
+    const riskIndex = AppState.risk.overall;
+    const targetOffset = 251 - (251 * (riskIndex / 100));
+
+    gaugeBar.style.transition = 'stroke-dashoffset 1s ease-out, stroke 0.8s';
+    gaugeBar.style.strokeDashoffset = targetOffset;
+
+    gaugeBar.classList.remove('success', 'warning', 'danger');
+    if (riskIndex <= 30) {
+      gaugeBar.classList.add('success');
+      gaugeBar.style.stroke = 'var(--color-success)';
+    } else if (riskIndex <= 60) {
+      gaugeBar.classList.add('warning');
+      gaugeBar.style.stroke = 'var(--color-warning)';
+    } else {
+      gaugeBar.classList.add('danger');
+      gaugeBar.style.stroke = 'var(--color-danger)';
+    }
+
+    if (gaugeVal) gaugeVal.textContent = riskIndex;
+    if (gaugeLabel) gaugeLabel.textContent = AppState.risk.category;
+
+    RiskEngine.renderRiskBreakdown();
+  }
+}
+
+// ============================================================================
+// SECTION 6: TRIP / COMPOSITE SAFETY SCORE ENGINE
+// ============================================================================
+class ScoreEngine {
+  static update() {
+    const driverScore = AppState.biometrics.score;
+    const envScore = Math.max(0, 100 - RiskEngine.computeWeatherRisk(AppState.environment));
+    const roadScore = Math.max(0, 100 - RiskEngine.computeRoadRisk(AppState.hazards));
+    const tripScore = Math.round((driverScore + envScore + roadScore) / 3);
+    const overall = Math.round(driverScore * 0.4 + envScore * 0.2 + roadScore * 0.2 + tripScore * 0.2);
+
+    AppState.tripScores.driver = driverScore;
+    AppState.tripScores.environmental = envScore;
+    AppState.tripScores.road = roadScore;
+    AppState.tripScores.trip = tripScore;
+    AppState.tripScores.overall = overall;
+
+    ScoreEngine.render();
+  }
+
+  static render() {
+    const s = AppState.tripScores;
+    const bind = (valId, barId, val) => {
+      const valEl = document.getElementById(valId);
+      const barEl = document.getElementById(barId);
+      if (valEl) valEl.textContent = val;
+      if (barEl) {
+        barEl.style.width = `${val}%`;
+        barEl.style.background = val > 80 ? 'var(--color-success)' : val > 55 ? 'var(--color-warning)' : 'var(--color-danger)';
+      }
+    };
+    bind('score-driver-val', 'score-driver-bar', s.driver);
+    bind('score-env-val', 'score-env-bar', s.environmental);
+    bind('score-road-val', 'score-road-bar', s.road);
+    bind('score-trip-val', 'score-trip-bar', s.trip);
+    bind('score-overall-val', 'score-overall-bar', s.overall);
+  }
+}
+
+// ============================================================================
+// SECTION 7: NEAR-MISS AI EVENT TRACKER
+// ============================================================================
+class NearMissAI {
+  static evaluate() {
+    const events = [];
+    if (Math.random() < 0.06) events.push({ type: 'Sudden Braking', severity: 'Warning' });
+    if (AppState.biometrics.laneKeeping < 88 || Math.random() < 0.04) events.push({ type: 'Lane Drift', severity: 'Warning' });
+    if (Math.random() < 0.03) events.push({ type: 'High Steering Angle', severity: 'Warning' });
+    if (AppState.navigation.currentSpeed > 55 || Math.random() < 0.03) events.push({ type: 'Overspeed', severity: 'High' });
+    if (AppState.biometrics.phoneDistraction) events.push({ type: 'Phone Usage While Driving', severity: 'High' });
+
+    if (events.length > 0) {
+      events.forEach(e => NearMissAI.logEvent(e));
+      if (events.length > 1) {
+        // Multiple concurrent risk events → escalate risk immediately
+        AppState.risk.overall = Math.min(100, AppState.risk.overall + 8 * events.length);
+        RiskEngine.renderGauge();
+      }
+    }
+  }
+
+  static logEvent(event) {
+    const entry = {
+      ...event,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    };
+    AppState.nearMiss.events.unshift(entry);
+    if (AppState.nearMiss.events.length > AppState.nearMiss.maxEvents) {
+      AppState.nearMiss.events.pop();
+    }
+    NearMissAI.render();
+  }
+
+  static render() {
+    const container = document.getElementById('near-miss-list');
+    if (!container) return;
+    if (AppState.nearMiss.events.length === 0) {
+      container.innerHTML = '<div style="font-size:12px; color: var(--text-muted);">No near-miss events recorded this trip.</div>';
+      return;
+    }
+    const colorMap = { Warning: 'var(--color-warning)', High: 'var(--color-danger)', Critical: 'var(--color-danger)' };
+    container.innerHTML = AppState.nearMiss.events.slice(0, 8).map(e => `
+      <div style="display:flex; justify-content:space-between; align-items:center; font-size:12px; padding: 6px 8px; background: rgba(255,255,255,0.02); border-radius: 8px;">
+        <span style="color:${colorMap[e.severity] || 'var(--text-secondary)'}; font-weight:600;">${e.type}</span>
+        <span style="color: var(--text-muted);">${e.time}</span>
+      </div>
+    `).join('');
+  }
+}
+
+// Map Tile Service Layer alias kept for backwards compatibility with any inline refs
+const MapTileURLAlias = MapTileURL;
 
 // --- INITIALIZATION ---
 document.addEventListener('DOMContentLoaded', () => {
-  // Initialize Lucide Vector Icons
   lucide.createIcons();
-  
-  // Set real-time clock update loop
   startClock();
-  
-  // Pre-load guest credentials if testing
+
   document.getElementById('login-email').value = 'developer@stellantis.com';
   document.getElementById('login-password').value = 'sentinel2026';
-  
-  // Initial page layout setup
+
   navigateTo('landing');
 });
 
@@ -102,26 +636,123 @@ function startClock() {
     const minutes = now.getMinutes().toString().padStart(2, '0');
     const ampm = hours >= 12 ? 'PM' : 'AM';
     hours = hours % 12;
-    hours = hours ? hours : 12; // the hour '0' should be '12'
+    hours = hours ? hours : 12;
     timeEl.textContent = `${hours}:${minutes} ${ampm}`;
   };
   updateTime();
   setInterval(updateTime, 1000);
 }
 
-// --- VOICE ASSISTANCE ENGINE (WOW Hackathon Feature) ---
+// --- VOICE ASSISTANCE ENGINE ---
 function speakText(text) {
   if (!AppState.settings.voiceFeedback || !('speechSynthesis' in window)) return;
-  // Cancel previous speak tasks to avoid queue overlays
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.pitch = 1.0;
   utterance.rate = 1.0;
-  // Try to find a pleasant English voice
   const voices = window.speechSynthesis.getVoices();
   const femaleVoice = voices.find(voice => voice.name.includes('Google US English') || voice.name.includes('Zira') || voice.lang.startsWith('en'));
   if (femaleVoice) utterance.voice = femaleVoice;
   window.speechSynthesis.speak(utterance);
+}
+
+// Predefined voice-assistant phrase bank (Part 8)
+const VoiceAssistantPhrases = {
+  morning: 'Good morning driver. SentinelAI systems are online and monitoring your safety.',
+  seatbelt: 'Seat belt detected. Thank you for buckling up.',
+  phoneUsage: 'Phone usage detected. Please keep your eyes on the road.',
+  rain: 'Heavy rain ahead. Please reduce your speed.',
+  breakSuggestion: 'You have been driving for a while. Consider taking a break.',
+  curve: 'Sharp curve ahead. Please slow down.',
+  sosReady: 'Emergency SOS system is armed and ready.',
+  saferRoute: 'A safer route has been found for your journey.'
+};
+
+// ============================================================================
+// SECTION 8: LIVE MODULE ORCHESTRATOR — lazily starts/stops all AI engines
+// ============================================================================
+class SentinelOrchestrator {
+  static start() {
+    SentinelOrchestrator.stopAll(); // guard against duplicate intervals
+
+    // Environment polling every 60s (simulated/live weather)
+    EnvironmentAI.fetchWeather().then(env => {
+      AppState.environment = { ...AppState.environment, ...env };
+      SentinelOrchestrator.renderEnvironment();
+    });
+    AppState.intervals.environmentPoll = setInterval(async () => {
+      const env = await EnvironmentAI.fetchWeather();
+      AppState.environment = { ...AppState.environment, ...env };
+      SentinelOrchestrator.renderEnvironment();
+      RecommendationEngine.render();
+    }, 60000);
+
+    // Risk engine recompute every 5s
+    AppState.intervals.riskEngine = setInterval(() => {
+      RiskEngine.computeOverallRisk();
+      RiskEngine.renderGauge();
+    }, 5000);
+
+    // Trip / composite score engine every 1s (Part 7 requirement)
+    AppState.intervals.tripScoreEngine = setInterval(() => {
+      ScoreEngine.update();
+    }, 1000);
+
+    // AI recommendation engine every 8s
+    AppState.intervals.recommendationEngine = setInterval(() => {
+      RecommendationEngine.render();
+    }, 8000);
+
+    // Near-miss watcher every 4s
+    AppState.intervals.nearMissWatcher = setInterval(() => {
+      NearMissAI.evaluate();
+    }, 4000);
+
+    // Kick off an immediate render pass
+    RiskEngine.computeOverallRisk();
+    RiskEngine.renderGauge();
+    ScoreEngine.update();
+    RecommendationEngine.render();
+    NearMissAI.render();
+  }
+
+  static stopAll() {
+    Object.keys(AppState.intervals).forEach(key => {
+      if (AppState.intervals[key]) {
+        clearInterval(AppState.intervals[key]);
+        AppState.intervals[key] = null;
+      }
+    });
+  }
+
+  static renderEnvironment() {
+    const env = AppState.environment;
+    const traction = EnvironmentAI.computeRoadTraction(env);
+    const glare = EnvironmentAI.computeSunGlare(env);
+    const rec = EnvironmentAI.generateRecommendation(env);
+
+    const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    setText('env-temp', `${Math.round(env.tempC)}°C`);
+    setText('env-condition', env.condition);
+    setText('env-visibility', `${(env.visibilityM / 1000).toFixed(1)} km`);
+    setText('env-wind', `${Math.round(env.windKph)} km/h`);
+    setText('env-rain', `${env.rainMm.toFixed ? env.rainMm.toFixed(1) : env.rainMm} mm/h`);
+    setText('env-humidity', `${Math.round(env.humidity)}%`);
+    setText('env-traction', `${traction}%`);
+    setText('env-glare', glare);
+    setText('env-night', env.isNight ? 'Active' : 'Inactive');
+
+    const recEl = document.getElementById('env-recommendation');
+    if (recEl) recEl.textContent = rec;
+
+    // Sync top header + dashboard weather widgets (existing UI elements)
+    const headerWeather = document.getElementById('header-weather');
+    if (headerWeather) headerWeather.textContent = `${Math.round(env.tempC)}°C • ${env.condition}`;
+    const dashWeather = document.getElementById('dash-weather');
+    if (dashWeather) dashWeather.textContent = `${Math.round(env.tempC)}°C`;
+    const dashWeatherSub = document.getElementById('dash-weather-sub');
+    if (dashWeatherSub) dashWeatherSub.textContent = env.rainMm > 0 ? 'Rainfall • Slick roads' : env.condition;
+  }
 }
 
 // --- ROUTER & PAGE SWITCHER ---
@@ -140,22 +771,18 @@ const PAGE_TITLES = {
 };
 
 function navigateTo(pageId) {
-  // Hide all screens, strip nav active styling
   document.querySelectorAll('.page-content').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
-  
-  // Set specific page active
+
   const targetPage = document.getElementById(`page-${pageId}`);
   if (targetPage) targetPage.classList.add('active');
-  
-  // Sidebar styling mapping
+
   const targetNavItem = document.getElementById(`nav-${pageId}`);
   if (targetNavItem) targetNavItem.classList.add('active');
-  
-  // Route guard / navigation panel controls
+
   const sidebar = document.getElementById('sidebar');
   const header = document.getElementById('header');
-  
+
   if (pageId === 'landing' || pageId === 'login') {
     sidebar.style.display = 'none';
     header.style.display = 'none';
@@ -163,11 +790,9 @@ function navigateTo(pageId) {
     sidebar.style.display = 'flex';
     header.style.display = 'flex';
   }
-  
-  // Update browser tab title dynamically
+
   document.title = PAGE_TITLES[pageId] || 'SentinelAI';
-  
-  // Trigger screen-specific initializations
+
   setTimeout(() => {
     switch (pageId) {
       case 'dashboard':
@@ -183,19 +808,18 @@ function navigateTo(pageId) {
         initRoadIntelMap();
         break;
       case 'risk-predict':
-        animateRiskGauge();
+        RiskEngine.computeOverallRisk();
+        RiskEngine.renderGauge();
         break;
       case 'gov-dashboard':
         initGovernmentAnalyticsCharts();
         break;
       case 'trip-summary':
-        // If navigating to trip summary, stop previous drives
         stopNavigationSimulation();
         break;
     }
   }, 100);
-  
-  // Refresh Lucide Icons (in case new items loaded dynamically)
+
   lucide.createIcons();
 }
 
@@ -215,9 +839,10 @@ function handleLogin(event) {
   AppState.user.email = email;
   AppState.user.username = 'Eng. John Doe';
   AppState.user.avatar = 'JD';
-  
+
   updateHeaderProfile();
-  speakText("Biometrics validated. Welcome back, Engineer John Doe. Sentinel Safety OS activated.");
+  speakText(VoiceAssistantPhrases.morning);
+  SentinelOrchestrator.start();
   navigateTo('dashboard');
 }
 
@@ -226,9 +851,10 @@ function loginAsGuest() {
   AppState.user.isGuest = true;
   AppState.user.username = 'Stellantis Guest';
   AppState.user.avatar = 'SG';
-  
+
   updateHeaderProfile();
-  speakText("Guest access enabled. Starting dashboard session.");
+  speakText('Guest access enabled. Starting dashboard session.');
+  SentinelOrchestrator.start();
   navigateTo('dashboard');
 }
 
@@ -237,12 +863,12 @@ function logout() {
   AppState.user.isGuest = false;
   AppState.user.username = 'Guest';
   AppState.user.avatar = 'G';
-  
-  // Reset maps and simulations
+
   stopNavigationSimulation();
   stopDriverMonitoringSimulation();
-  
-  speakText("Sentinel Safety OS deactivated. Goodbye.");
+  SentinelOrchestrator.stopAll();
+
+  speakText('Sentinel Safety OS deactivated. Goodbye.');
   navigateTo('landing');
 }
 
@@ -251,160 +877,145 @@ function updateHeaderProfile() {
   document.getElementById('header-avatar').textContent = AppState.user.avatar;
 }
 
-// --- MAP 1: HOME DASHBOARD MAP ---
+// --- MAP 1: HOME DASHBOARD MAP (Bangalore) ---
 function initDashboardMap() {
   const container = document.getElementById('dashboard-map');
   if (!container) return;
-  
+
   if (AppState.maps.dashboard) {
     AppState.maps.dashboard.invalidateSize();
     return;
   }
-  
-  // Detroit Coordinates
-  const detroitCoords = [42.3314, -83.0458];
+
   AppState.maps.dashboard = L.map('dashboard-map', {
     zoomControl: false,
     attributionControl: false
-  }).setView(detroitCoords, 13);
-  
+  }).setView(BLR_CENTER, 12);
+
   L.tileLayer(MapTileURL, {
     maxZoom: 19,
     attribution: MapAttrib
   }).addTo(AppState.maps.dashboard);
-  
-  // Add Current Vehicle Indicator
+
   const carIcon = L.divIcon({
     className: 'custom-car-marker',
     html: '<div style="background: var(--color-primary); width:16px; height:16px; border:3px solid #fff; border-radius:50%; box-shadow:0 0 10px var(--color-primary);"></div>',
     iconSize: [16, 16]
   });
-  L.marker(detroitCoords, { icon: carIcon }).addTo(AppState.maps.dashboard)
-    .bindPopup("<b>Your Vehicle</b><br>Woodward Ave, Detroit").openPopup();
-    
-  // Render current hazards from database
+  L.marker(ROUTE_REVA_TO_AIRPORT[0], { icon: carIcon }).addTo(AppState.maps.dashboard)
+    .bindPopup("<b>Your Vehicle</b><br>REVA University, Bengaluru").openPopup();
+
   renderMapHazards(AppState.maps.dashboard);
 }
 
 function renderMapHazards(mapInstance) {
   AppState.hazards.forEach(h => {
-    let glowColor = 'var(--color-warning)';
-    if (h.severity === 'Critical') glowColor = 'var(--color-danger)';
-    if (h.severity === 'Low') glowColor = 'var(--color-success)';
-    
+    const glowColor = SEVERITY_COLOR[h.severity] || 'var(--color-warning)';
+    const iconName = HAZARD_ICONS[h.type] || 'alert-triangle';
+
     const hazardIcon = L.divIcon({
       className: 'custom-hazard-marker',
       html: `<div style="background: ${glowColor}; width:12px; height:12px; border:2px solid #000; border-radius:50%; box-shadow: 0 0 8px ${glowColor};"></div>`,
       iconSize: [12, 12]
     });
-    
+
     L.marker([h.lat, h.lng], { icon: hazardIcon })
       .addTo(mapInstance)
-      .bindPopup(`<b>${h.label}</b><br>Severity: ${h.severity}<br>Reported: ${h.time}`);
+      .bindPopup(`
+        <b>${h.label}</b><br>
+        Severity: ${h.severity}<br>
+        Risk Score: ${h.risk ?? 'N/A'}/100<br>
+        Recommendation: ${h.recommendation || 'Proceed with caution.'}<br>
+        Reported: ${h.time}
+      `);
   });
 }
 
-// --- MAP 2: SAFE DRIVE CARPLAY MAP & NAVIGATION SIMULATION ---
+// --- MAP 2: SAFE DRIVE CARPLAY MAP & NAVIGATION SIMULATION (Bangalore) ---
 function initSafeDriveMap() {
   const container = document.getElementById('safe-drive-map');
   if (!container) return;
-  
+
   if (AppState.maps.safeDrive) {
     AppState.maps.safeDrive.invalidateSize();
     return;
   }
-  
-  const startCoords = [42.3314, -83.0458]; // Woodward Ave
+
+  const startCoords = ROUTE_REVA_TO_AIRPORT[0];
   AppState.maps.safeDrive = L.map('safe-drive-map', {
     zoomControl: true,
     attributionControl: false
-  }).setView(startCoords, 13);
-  
+  }).setView(startCoords, 11);
+
   L.tileLayer(MapTileURL, {
     maxZoom: 19,
     attribution: MapAttrib
   }).addTo(AppState.maps.safeDrive);
-  
+
   renderMapHazards(AppState.maps.safeDrive);
-  
-  // Define simulated route polylines
-  // Safest Woodward Loop route
-  const safestCoords = [
-    [42.3314, -83.0458], // Start
-    [42.3360, -83.0500],
-    [42.3420, -83.0570],
-    [42.3480, -83.0630],
-    [42.3580, -83.0750], // Airport approach
-    [42.3650, -83.0800]  // Airport
-  ];
-  
-  // Fastest I-75 Highway route (passes near high construction zone)
-  const fastestCoords = [
-    [42.3314, -83.0458], // Start
-    [42.3340, -83.0380],
-    [42.3480, -83.0420],
-    [42.3550, -83.0600], // Passes through construction
-    [42.3610, -83.0720],
-    [42.3650, -83.0800]  // Airport
-  ];
-  
-  // Store raw coordinate arrays (not LatLng objects) for interpolation
+
+  const safestCoords = ROUTE_REVA_TO_AIRPORT;
+  const fastestCoords = ROUTE_REVA_TO_AIRPORT_FAST;
+
   AppState.navigation.safestCoords = safestCoords;
   AppState.navigation.fastestCoords = fastestCoords;
-  
-  // Draw glowing paths
+
   AppState.navigation.safestPath = L.polyline(safestCoords, {
     color: '#10b981',
     weight: 6,
     opacity: 0.85,
     dashArray: '10, 5'
   }).addTo(AppState.maps.safeDrive);
-  
+
   AppState.navigation.fastestPath = L.polyline(fastestCoords, {
     color: '#3b82f6',
     weight: 4,
     opacity: 0.5
   }).addTo(AppState.maps.safeDrive);
-  
-  // Vehicle navigation avatar marker
+
   const vehicleIcon = L.divIcon({
     className: 'nav-vehicle-marker',
     html: '<div style="background: var(--color-primary); width:20px; height:20px; border:4px solid #fff; border-radius:50%; box-shadow:0 0 15px var(--color-primary);"></div>',
     iconSize: [20, 20]
   });
-  
+
   AppState.navigation.carMarker = L.marker(startCoords, { icon: vehicleIcon }).addTo(AppState.maps.safeDrive);
-  // Initialize with safest route coords
   AppState.navigation.routeCoords = safestCoords;
+
+  const bounds = L.latLngBounds([...safestCoords, ...fastestCoords]);
+  AppState.maps.safeDrive.fitBounds(bounds, { padding: [30, 30] });
 }
 
 function selectRoute(routeType) {
   document.getElementById('route-safest').classList.remove('selected');
   document.getElementById('route-fastest').classList.remove('selected');
-  
+
   document.getElementById(`route-${routeType}`).classList.add('selected');
   AppState.navigation.chosenRoute = routeType;
-  
+
   if (routeType === 'safest') {
     AppState.navigation.safestPath.setStyle({ color: '#10b981', weight: 6, opacity: 0.85 });
     AppState.navigation.fastestPath.setStyle({ color: '#3b82f6', weight: 4, opacity: 0.5 });
-    // Use stored raw coordinate arrays
-    AppState.navigation.routeCoords = AppState.navigation.safestCoords || AppState.navigation.safestPath.getLatLngs().map(ll => [ll.lat, ll.lng]);
-    document.getElementById('nav-assistant-prompt').textContent = 
-      '"Heavy rain detected. Safest route selected to avoid standing water on Jefferson Ave. Maintain present speed limit."';
+    AppState.navigation.routeCoords = AppState.navigation.safestCoords;
+    document.getElementById('nav-assistant-prompt').textContent =
+      '"Live traffic analyzed. Safest route selected via Outer Ring Road to avoid Silk Board congestion. Maintain present speed limit."';
+    speakText(VoiceAssistantPhrases.saferRoute);
   } else {
     AppState.navigation.safestPath.setStyle({ color: '#10b981', weight: 4, opacity: 0.5 });
     AppState.navigation.fastestPath.setStyle({ color: '#3b82f6', weight: 6, opacity: 0.85 });
-    AppState.navigation.routeCoords = AppState.navigation.fastestCoords || AppState.navigation.fastestPath.getLatLngs().map(ll => [ll.lat, ll.lng]);
-    document.getElementById('nav-assistant-prompt').textContent = 
-      '"Warning: Fastest route leads through a high construction zone. Speed reduction and alertness recommended."';
+    AppState.navigation.routeCoords = AppState.navigation.fastestCoords;
+    document.getElementById('nav-assistant-prompt').textContent =
+      '"Warning: Fastest route passes through Hebbal accident zone and Silk Board congestion. Reduced speed and heightened alertness recommended."';
   }
+
+  RiskEngine.computeOverallRisk();
+  RiskEngine.renderGauge();
 }
 
 // Drive Simulation loops
 function toggleNavigationSimulation() {
   const btn = document.getElementById('btn-toggle-navigation');
-  
+
   if (AppState.navigation.isNavigating) {
     stopNavigationSimulation();
     btn.innerHTML = '<i data-lucide="play"></i> Start Navigation';
@@ -421,12 +1032,11 @@ function toggleNavigationSimulation() {
 function startNavigationSimulation() {
   AppState.navigation.isNavigating = true;
   AppState.navigation.stepIndex = 0;
-  
+
   const totalSteps = AppState.navigation.routeCoords.length;
-  
+
   AppState.navigation.intervalId = setInterval(() => {
     if (AppState.navigation.stepIndex >= totalSteps) {
-      // Trip completed!
       stopNavigationSimulation();
       speakText("Trip complete. Auto generating safety summaries.");
       setTimeout(() => {
@@ -434,31 +1044,28 @@ function startNavigationSimulation() {
       }, 1000);
       return;
     }
-    
-    // Update car coordinates
+
     const nextCoords = AppState.navigation.routeCoords[AppState.navigation.stepIndex];
     AppState.navigation.carMarker.setLatLng(nextCoords);
     AppState.maps.safeDrive.panTo(nextCoords);
-    
-    // Vary speeds dynamically
+
     let speed = Math.floor(Math.random() * 8) + 42;
     let limit = 50;
-    
-    // If approaching construction zone (in fastest route)
+    AppState.navigation.currentSpeed = speed;
+    AppState.tripScores.distanceKm += 3.5;
+
     if (AppState.navigation.chosenRoute === 'fastest' && AppState.navigation.stepIndex === 3) {
       speed = 28;
       limit = 30;
-      document.getElementById('nav-assistant-prompt').textContent = 
-        "\"Entering active Construction Zone. Potholes identified nearby. Recommended Speed: 30 MPH.\"";
-      speakText("Warning. Entering active construction corridor. Reduce speed.");
+      document.getElementById('nav-assistant-prompt').textContent =
+        "\"Entering Hebbal accident-prone corridor. Potential hazards nearby. Recommended Speed: 30 km/h.\"";
+      speakText("Warning. Entering high-risk accident corridor near Hebbal. Reduce speed.");
     }
-    
+
     document.getElementById('nav-hud-speed').textContent = `${speed} mph`;
     document.getElementById('nav-hud-limit').textContent = `${limit} mph`;
-    
-    // Update top header hud details dynamically
     document.getElementById('dash-hud-speed').textContent = `${speed} MPH`;
-    
+
     AppState.navigation.stepIndex++;
   }, 3500);
 }
@@ -476,13 +1083,13 @@ function toggleVoiceAssistant() {
   const statusEl = document.getElementById('voice-assistant-status');
   statusEl.textContent = AppState.settings.voiceFeedback ? 'ACTIVE' : 'MUTED';
   statusEl.style.color = AppState.settings.voiceFeedback ? 'var(--color-success)' : 'var(--color-danger)';
-  
+
   if (AppState.settings.voiceFeedback) {
     speakText("Voice assistance activated.");
   }
 }
 
-// --- 5. DRIVER MONITORING LOGIC & REAL-TIME WEBCAM FACE DETECTION ---
+// --- DRIVER MONITORING LOGIC & REAL-TIME WEBCAM FACE DETECTION ---
 async function toggleLiveWebcam() {
   const btn = document.getElementById('btn-toggle-webcam');
   const video = document.getElementById('webcam-feed');
@@ -511,11 +1118,10 @@ async function toggleLiveWebcam() {
         lucide.createIcons();
       }
 
-      // Check if browser supports native Shape Detection API (FaceDetector)
       if ('FaceDetector' in window) {
         try {
           AppState.webcam.detector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
-        } catch(e) { AppState.webcam.detector = null; }
+        } catch (e) { AppState.webcam.detector = null; }
       }
 
       startRealtimeFaceTracker();
@@ -567,7 +1173,8 @@ function stopLiveWebcam() {
   speakText("Live webcam feed disengaged.");
 }
 
-// Real-time Face Detection HUD Canvas Loop
+// Real-time Face Detection HUD Canvas Loop (unchanged visual behaviour,
+// now cross-feeds the DriverAI placeholder pipeline for consistent scoring)
 function startRealtimeFaceTracker() {
   const video = document.getElementById('webcam-feed');
   const canvas = document.getElementById('face-mesh-canvas');
@@ -578,7 +1185,6 @@ function startRealtimeFaceTracker() {
   let scanDir = 1;
   let detectCounter = 0;
 
-  // Offscreen canvas for luminance feature tracking
   const sampleCanvas = document.createElement('canvas');
   sampleCanvas.width = 160;
   sampleCanvas.height = 120;
@@ -587,7 +1193,6 @@ function startRealtimeFaceTracker() {
   async function processFrame() {
     if (!AppState.webcam.isLive) return;
 
-    // Match canvas display resolution with video container
     const width = video.offsetWidth || 640;
     const height = video.offsetHeight || 480;
     if (canvas.width !== width || canvas.height !== height) {
@@ -597,14 +1202,12 @@ function startRealtimeFaceTracker() {
 
     ctx.clearRect(0, 0, width, height);
 
-    // 1. Face Detection Logic
     detectCounter++;
     if (AppState.webcam.detector && video.readyState === 4 && detectCounter % 3 === 0) {
       try {
         const faces = await AppState.webcam.detector.detect(video);
         if (faces && faces.length > 0) {
           const bounding = faces[0].boundingBox;
-          // Scale from video resolution to display resolution
           const vW = video.videoWidth || width;
           const vH = video.videoHeight || height;
           AppState.webcam.targetBox = {
@@ -617,7 +1220,6 @@ function startRealtimeFaceTracker() {
       } catch (e) { /* fallback to feature tracking below */ }
     }
 
-    // Adaptive luminance skin/feature centroid detection
     if ((!AppState.webcam.detector || detectCounter % 15 === 0) && video.readyState === 4) {
       try {
         sampleCtx.drawImage(video, 0, 0, 160, 120);
@@ -627,8 +1229,7 @@ function startRealtimeFaceTracker() {
         for (let y = 15; y < 105; y += 3) {
           for (let x = 20; x < 140; x += 3) {
             const idx = (y * 160 + x) * 4;
-            const r = imgData[idx], g = imgData[idx+1], b = imgData[idx+2];
-            // YCbCr skin tone heuristic
+            const r = imgData[idx], g = imgData[idx + 1], b = imgData[idx + 2];
             if (r > 60 && g > 40 && b > 20 && r > b && (r - g) > 10) {
               sumX += x;
               sumY += y;
@@ -640,7 +1241,6 @@ function startRealtimeFaceTracker() {
         if (count > 80) {
           const avgX = (sumX / count) / 160;
           const avgY = (sumY / count) / 120;
-          // LERP target position smoothly
           AppState.webcam.targetBox = {
             x: Math.max(0.1, Math.min(0.6, avgX - 0.18)),
             y: Math.max(0.1, Math.min(0.5, avgY - 0.22)),
@@ -648,10 +1248,9 @@ function startRealtimeFaceTracker() {
             h: 0.48
           };
         }
-      } catch(e) {}
+      } catch (e) {}
     }
 
-    // Smooth LERP box position
     const box = AppState.webcam.faceBox;
     const target = AppState.webcam.targetBox;
     box.x += (target.x - box.x) * 0.15;
@@ -659,16 +1258,14 @@ function startRealtimeFaceTracker() {
     box.w += (target.w - box.w) * 0.15;
     box.h += (target.h - box.h) * 0.15;
 
-    // Convert relative box to pixel coords (mirroring flipped for user facing camera)
     const px = (1 - box.x - box.w) * width;
     const py = box.y * height;
     const pw = box.w * width;
     const ph = box.h * height;
 
-    // Determine Head Gaze, Alignment, and Attentiveness score from face position telemetry
     const faceCenterX = box.x + box.w / 2;
     const faceCenterY = box.y + box.h / 2;
-    
+
     let gaze = 'Road Center';
     let gazeColor = 'var(--color-success)';
     let currentScore = 96;
@@ -685,9 +1282,7 @@ function startRealtimeFaceTracker() {
     let laneClass = 'factor-status-pill success';
     let voiceAlertText = '"Live Camera: Face lock active. Driver fully alert and attentive."';
 
-    // Telemetry evaluation
     if (box.w < 0.1 || box.h < 0.1) {
-      // Driver out of frame / absent
       currentScore = 30;
       gaze = 'No Driver Detected';
       gazeColor = 'var(--color-danger)';
@@ -743,10 +1338,11 @@ function startRealtimeFaceTracker() {
       voiceAlertText = '"Warning: Head tilt / low gaze detected. Drowsiness threshold reached."';
     }
 
-    // Sync AppState with live telemetry
     AppState.biometrics.score = currentScore;
+    AppState.biometrics.gaze = gaze;
+    AppState.biometrics.phoneDistraction = phoneText !== 'NONE';
+    AppState.biometrics.laneKeeping = parseInt(laneText, 10) || AppState.biometrics.laneKeeping;
 
-    // Update real-time HUD UI elements & score circular gauge
     const bioGazeEl = document.getElementById('bio-gaze');
     const scoreValEl = document.getElementById('driver-score-val');
     const scoreCircleEl = document.getElementById('driver-score-circle');
@@ -757,81 +1353,33 @@ function startRealtimeFaceTracker() {
     const laneEl = document.getElementById('bio-lane');
     const voiceAlertEl = document.getElementById('driver-voice-alert');
 
-    if (bioGazeEl) {
-      bioGazeEl.textContent = gaze;
-      bioGazeEl.style.color = gazeColor;
-    }
-    if (scoreValEl) {
-      scoreValEl.textContent = currentScore;
-    }
-    if (scoreLabelEl) {
-      scoreLabelEl.textContent = scoreText;
-      scoreLabelEl.style.color = scoreColor;
-    }
+    if (bioGazeEl) { bioGazeEl.textContent = gaze; bioGazeEl.style.color = gazeColor; }
+    if (scoreValEl) scoreValEl.textContent = currentScore;
+    if (scoreLabelEl) { scoreLabelEl.textContent = scoreText; scoreLabelEl.style.color = scoreColor; }
     if (scoreCircleEl) {
       scoreCircleEl.className = circleClass;
       const scoreFraction = currentScore / 100;
       const strokeOffset = 389 - (389 * scoreFraction);
       scoreCircleEl.style.strokeDashoffset = strokeOffset;
     }
-    if (drowsinessEl) {
-      drowsinessEl.textContent = drowsinessText;
-      drowsinessEl.className = drowsinessClass;
-    }
-    if (phoneEl) {
-      phoneEl.textContent = phoneText;
-      phoneEl.className = phoneClass;
-    }
-    if (yawningEl) {
-      yawningEl.textContent = yawningText;
-      yawningEl.className = yawningClass;
-    }
-    if (laneEl) {
-      laneEl.textContent = laneText;
-      laneEl.className = laneClass;
-    }
-    if (voiceAlertEl) {
-      voiceAlertEl.textContent = voiceAlertText;
-    }
+    if (drowsinessEl) { drowsinessEl.textContent = drowsinessText; drowsinessEl.className = drowsinessClass; }
+    if (phoneEl) { phoneEl.textContent = phoneText; phoneEl.className = phoneClass; }
+    if (yawningEl) { yawningEl.textContent = yawningText; yawningEl.className = yawningClass; }
+    if (laneEl) { laneEl.textContent = laneText; laneEl.className = laneClass; }
+    if (voiceAlertEl) voiceAlertEl.textContent = voiceAlertText;
 
-    // 2. Draw Futuristic Cybernetic HUD Overlay on Canvas
-    // Corner brackets
+    // HUD overlay drawing (corner brackets, scan line, mesh) — unchanged visuals
     const bracketSize = Math.min(pw, ph) * 0.2;
     ctx.strokeStyle = '#22c55e';
     ctx.lineWidth = 3;
     ctx.shadowColor = '#22c55e';
     ctx.shadowBlur = 10;
 
-    // Top-Left
-    ctx.beginPath();
-    ctx.moveTo(px, py + bracketSize);
-    ctx.lineTo(px, py);
-    ctx.lineTo(px + bracketSize, py);
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px, py + bracketSize); ctx.lineTo(px, py); ctx.lineTo(px + bracketSize, py); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px + pw - bracketSize, py); ctx.lineTo(px + pw, py); ctx.lineTo(px + pw, py + bracketSize); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px, py + ph - bracketSize); ctx.lineTo(px, py); ctx.lineTo(px, py + ph); ctx.lineTo(px + bracketSize, py + ph); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px + pw - bracketSize, py + ph); ctx.lineTo(px + pw, py + ph); ctx.lineTo(px + pw, py + ph - bracketSize); ctx.stroke();
 
-    // Top-Right
-    ctx.beginPath();
-    ctx.moveTo(px + pw - bracketSize, py);
-    ctx.lineTo(px + pw, py);
-    ctx.lineTo(px + pw, py + bracketSize);
-    ctx.stroke();
-
-    // Bottom-Left
-    ctx.beginPath();
-    ctx.moveTo(px, py + ph - bracketSize);
-    ctx.lineTo(px, py);
-    ctx.lineTo(px, py + ph);
-    ctx.lineTo(px + bracketSize, py + ph);
-    ctx.stroke();
-
-    // Bottom-Right
-    ctx.beginPath();
-    ctx.moveTo(px + pw - bracketSize, py + ph);
-    ctx.lineTo(px + pw, py + ph);
-    ctx.lineTo(px + pw, py + ph - bracketSize);
-    ctx.stroke();
-
-    // Scanning laser sweep
     scanLineY += scanDir * 3;
     if (scanLineY > ph || scanLineY < 0) scanDir *= -1;
     ctx.fillStyle = 'rgba(37, 99, 235, 0.35)';
@@ -840,12 +1388,8 @@ function startRealtimeFaceTracker() {
     ctx.lineWidth = 1.5;
     ctx.shadowColor = '#2563eb';
     ctx.shadowBlur = 8;
-    ctx.beginPath();
-    ctx.moveTo(px, py + scanLineY);
-    ctx.lineTo(px + pw, py + scanLineY);
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px, py + scanLineY); ctx.lineTo(px + pw, py + scanLineY); ctx.stroke();
 
-    // Facial Mesh Points
     const eyeY = py + ph * 0.35;
     const eyeL_X = px + pw * 0.32;
     const eyeR_X = px + pw * 0.68;
@@ -856,16 +1400,11 @@ function startRealtimeFaceTracker() {
     const mouthR_X = px + pw * 0.62;
 
     const meshPoints = [
-      { x: eyeL_X, y: eyeY },
-      { x: eyeR_X, y: eyeY },
-      { x: noseX, y: noseY },
-      { x: mouthL_X, y: mouthY },
-      { x: mouthR_X, y: mouthY },
-      { x: px + pw * 0.5, y: py + ph * 0.2 }, // Forehead
-      { x: px + pw * 0.5, y: py + ph * 0.88 } // Chin
+      { x: eyeL_X, y: eyeY }, { x: eyeR_X, y: eyeY }, { x: noseX, y: noseY },
+      { x: mouthL_X, y: mouthY }, { x: mouthR_X, y: mouthY },
+      { x: px + pw * 0.5, y: py + ph * 0.2 }, { x: px + pw * 0.5, y: py + ph * 0.88 }
     ];
 
-    // Connect mesh points with cybernetic lines
     ctx.strokeStyle = 'rgba(34, 197, 94, 0.25)';
     ctx.lineWidth = 1;
     ctx.shadowBlur = 0;
@@ -880,17 +1419,11 @@ function startRealtimeFaceTracker() {
     ctx.lineTo(meshPoints[2].x, meshPoints[2].y);
     ctx.stroke();
 
-    // Render glowing mesh nodes
     ctx.fillStyle = '#22c55e';
     ctx.shadowColor = '#22c55e';
     ctx.shadowBlur = 6;
-    meshPoints.forEach(pt => {
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
-      ctx.fill();
-    });
+    meshPoints.forEach(pt => { ctx.beginPath(); ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2); ctx.fill(); });
 
-    // Dual Eye Target Rings
     [meshPoints[0], meshPoints[1]].forEach((eyePt, idx) => {
       ctx.strokeStyle = '#2563eb';
       ctx.lineWidth = 1.5;
@@ -899,13 +1432,12 @@ function startRealtimeFaceTracker() {
       ctx.beginPath();
       ctx.arc(eyePt.x, eyePt.y, 12, 0, Math.PI * 2);
       ctx.stroke();
-      
+
       ctx.font = '10px Inter';
       ctx.fillStyle = '#ffffff';
       ctx.fillText(idx === 0 ? 'EYE_L: 99%' : 'EYE_R: 99%', eyePt.x - 22, eyePt.y - 16);
     });
 
-    // Target telemetry overlay header
     ctx.fillStyle = '#22c55e';
     ctx.font = 'bold 11px Poppins';
     ctx.shadowColor = '#22c55e';
@@ -919,55 +1451,101 @@ function startRealtimeFaceTracker() {
 }
 
 function startDriverMonitoringSimulation() {
-  // Auto-engage live webcam if not already live
   if (!AppState.webcam.isLive) {
     toggleLiveWebcam();
   }
 
   if (AppState.biometrics.intervalId) return;
-  
+
   const blinkEl = document.getElementById('bio-blink');
   const closureEl = document.getElementById('bio-closure');
   const gazeEl = document.getElementById('bio-gaze');
   const scoreCircle = document.getElementById('driver-score-circle');
-  const scoreVal = document.getElementById('driver-score-val');
   const scoreLabel = document.getElementById('driver-score-label');
-  
-  const seatbeltPill = document.getElementById('bio-seatbelt');
   const drowsinessPill = document.getElementById('bio-drowsiness');
+  const seatbeltPill = document.getElementById('bio-seatbelt');
   const phonePill = document.getElementById('bio-phone');
   const yawningPill = document.getElementById('bio-yawning');
   const lanePill = document.getElementById('bio-lane');
   const voiceAlertEl = document.getElementById('driver-voice-alert');
-  
-  AppState.biometrics.intervalId = setInterval(() => {
-    // Only randomize if webcam is not live
-    if (!AppState.webcam.isLive) {
-      const blink = Math.floor(Math.random() * 6) + 15;
-      const closure = (Math.random() * 0.1 + 0.18).toFixed(2);
-      const gazes = ['Road Center', 'Road Center', 'Left Mirror', 'Right Mirror', 'Dashboard'];
-      const gaze = gazes[Math.floor(Math.random() * gazes.length)];
-      
-      if (blinkEl) blinkEl.textContent = `${blink} / min`;
-      if (closureEl) closureEl.textContent = `${closure}s (Normal)`;
-      if (gazeEl) gazeEl.textContent = gaze;
 
-      if (AppState.biometrics.score > 85) {
-        if (drowsinessPill) {
-          drowsinessPill.textContent = 'ALERT';
-          drowsinessPill.className = 'factor-status-pill success';
-        }
-        if (scoreLabel) {
-          scoreLabel.textContent = 'Driver Fully Alert';
-          scoreLabel.style.color = 'var(--color-success)';
-        }
+  AppState.biometrics.intervalId = setInterval(() => {
+    // AI placeholder pipeline drives simulated telemetry when webcam is off
+    if (!AppState.webcam.isLive) {
+      const seatbelt = DriverAI.detectSeatbelt();
+      const eyeClosure = DriverAI.detectEyeClosure();
+      const blink = DriverAI.detectBlinkRate();
+      const yawn = DriverAI.detectYawning();
+      const phone = DriverAI.detectPhone();
+      const headPose = DriverAI.detectHeadPose();
+      const lane = DriverAI.detectLaneDeparture();
+      const steering = DriverAI.detectAggressiveSteering();
+      const fatigue = DriverAI.detectFatigue(eyeClosure, blink, yawn);
+      const gazes = ['Road Center', 'Road Center', 'Left Mirror', 'Right Mirror', 'Dashboard'];
+      const gaze = headPose.pose === 'Centered' ? 'Road Center' : gazes[Math.floor(Math.random() * gazes.length)];
+      const distraction = DriverAI.detectDistraction(phone, headPose, gaze);
+      const driverScore = DriverAI.computeDriverScore({ seatbelt, fatigue, distraction, lane });
+
+      AppState.biometrics.blinkRate = blink.blinksPerMinute;
+      AppState.biometrics.eyeClosure = eyeClosure.earValue;
+      AppState.biometrics.gaze = gaze;
+      AppState.biometrics.score = driverScore;
+      AppState.biometrics.seatbelt = seatbelt.buckled;
+      AppState.biometrics.phoneDistraction = phone.phoneDetected;
+      AppState.biometrics.yawning = yawn.yawning ? AppState.biometrics.yawning + 1 : AppState.biometrics.yawning;
+      AppState.biometrics.laneKeeping = lane.laneKeepingScore;
+      AppState.biometrics.headPose = headPose.pose;
+      AppState.biometrics.aggressiveSteering = steering.aggressive;
+
+      if (blinkEl) blinkEl.textContent = `${blink.blinksPerMinute} / min`;
+      if (closureEl) closureEl.textContent = `${eyeClosure.earValue}s (${eyeClosure.closed ? 'Extended' : 'Normal'})`;
+      if (gazeEl) gazeEl.textContent = gaze;
+      if (seatbeltPill) {
+        seatbeltPill.textContent = seatbelt.buckled ? 'SECURED' : 'UNBUCKLED';
+        seatbeltPill.className = `factor-status-pill ${seatbelt.buckled ? 'success' : 'danger'}`;
+      }
+      if (phonePill) {
+        phonePill.textContent = phone.phoneDetected ? 'DETECTED' : 'NONE';
+        phonePill.className = `factor-status-pill ${phone.phoneDetected ? 'danger' : 'success'}`;
+      }
+      if (yawningPill) {
+        yawningPill.textContent = `${AppState.biometrics.yawning} / hr`;
+        yawningPill.className = `factor-status-pill ${AppState.biometrics.yawning > 2 ? 'warning' : 'success'}`;
+      }
+      if (lanePill) {
+        lanePill.textContent = `${lane.laneKeepingScore}% Match`;
+        lanePill.className = `factor-status-pill ${lane.laneKeepingScore < 88 ? 'warning' : 'success'}`;
+      }
+
+      if (driverScore > 85) {
+        if (drowsinessPill) { drowsinessPill.textContent = 'ALERT'; drowsinessPill.className = 'factor-status-pill success'; }
+        if (scoreLabel) { scoreLabel.textContent = 'Driver Fully Alert'; scoreLabel.style.color = 'var(--color-success)'; }
         if (scoreCircle) {
           scoreCircle.className = 'circle-bar success';
-          const scoreFraction = AppState.biometrics.score / 100;
-          const strokeOffset = 389 - (389 * scoreFraction);
+          const strokeOffset = 389 - (389 * (driverScore / 100));
           scoreCircle.style.strokeDashoffset = strokeOffset;
         }
+      } else if (driverScore > 60) {
+        if (drowsinessPill) { drowsinessPill.textContent = 'CAUTION'; drowsinessPill.className = 'factor-status-pill warning'; }
+        if (scoreLabel) { scoreLabel.textContent = 'Mild Distraction Detected'; scoreLabel.style.color = 'var(--color-warning)'; }
+        if (scoreCircle) {
+          scoreCircle.className = 'circle-bar warning';
+          const strokeOffset = 389 - (389 * (driverScore / 100));
+          scoreCircle.style.strokeDashoffset = strokeOffset;
+        }
+      } else {
+        if (drowsinessPill) { drowsinessPill.textContent = 'FATIGUED'; drowsinessPill.className = 'factor-status-pill danger'; }
+        if (scoreLabel) { scoreLabel.textContent = 'Fatigue Warning'; scoreLabel.style.color = 'var(--color-danger)'; }
+        if (scoreCircle) {
+          scoreCircle.className = 'circle-bar danger';
+          const strokeOffset = 389 - (389 * (driverScore / 100));
+          scoreCircle.style.strokeDashoffset = strokeOffset;
+        }
+        if (voiceAlertEl) voiceAlertEl.textContent = '"Warning: Fatigue indicators elevated. Please consider taking a break."';
       }
+
+      const scoreValEl = document.getElementById('driver-score-val');
+      if (scoreValEl) scoreValEl.textContent = driverScore;
     }
   }, 3000);
 }
@@ -979,84 +1557,80 @@ function stopDriverMonitoringSimulation() {
   }
 }
 
-// Simulate severe drowsiness warning to show ADAS functionality
+// Simulate severe drowsiness warning to demo ADAS functionality
 function triggerSimulatedDrowsinessAlert() {
-  // Navigate to driver monitor if not there
   navigateTo('driver-monitor');
-  
+
   const scoreCircle = document.getElementById('driver-score-circle');
   const scoreVal = document.getElementById('driver-score-val');
   const scoreLabel = document.getElementById('driver-score-label');
   const drowsinessPill = document.getElementById('bio-drowsiness');
   const voiceAlertEl = document.getElementById('driver-voice-alert');
-  
-  // Decrease safety stats
+
   AppState.biometrics.score = 58;
   scoreVal.textContent = '58';
-  
+
   const scoreFraction = AppState.biometrics.score / 100;
   const strokeOffset = 389 - (389 * scoreFraction);
   scoreCircle.style.strokeDashoffset = strokeOffset;
   scoreCircle.className = 'circle-bar danger';
-  
+
   drowsinessPill.textContent = 'FATIGUED';
   drowsinessPill.className = 'factor-status-pill danger';
-  
+
   document.getElementById('bio-yawning').textContent = '4 / hr';
   document.getElementById('bio-yawning').className = 'factor-status-pill warning';
-  
+
   scoreLabel.textContent = 'Fatigue Warning Level 3';
   scoreLabel.style.color = 'var(--color-danger)';
-  
+
   voiceAlertEl.textContent = '"Attention: You appear tired. Eye closure rate has slowed. Please take a break immediately."';
-  
+
   speakText("Warning. You appear fatigued. Eye closure rates exceed threshold. Please park the vehicle and take a break.");
+  NearMissAI.logEvent({ type: 'Fatigue Warning Escalation', severity: 'High' });
 }
 
-// --- MAP 3: ROAD INTELLIGENCE MAP & REPORTER ---
+// --- MAP 3: ROAD INTELLIGENCE MAP & REPORTER (Bangalore) ---
 let reportedHazardLocation = null;
 
 function initRoadIntelMap() {
   const container = document.getElementById('road-intel-map');
   if (!container) return;
-  
+
   if (AppState.maps.roadIntel) {
     AppState.maps.roadIntel.invalidateSize();
     return;
   }
-  
-  const centerCoords = [42.3314, -83.0458];
+
   AppState.maps.roadIntel = L.map('road-intel-map', {
     zoomControl: true,
     attributionControl: false
-  }).setView(centerCoords, 13);
-  
+  }).setView(BLR_CENTER, 12);
+
   L.tileLayer(MapTileURL, {
     maxZoom: 19,
     attribution: MapAttrib
   }).addTo(AppState.maps.roadIntel);
-  
+
   renderMapHazards(AppState.maps.roadIntel);
-  
-  // Setup click handler to place custom pins
+
   AppState.maps.roadIntel.on('click', (e) => {
     reportedHazardLocation = e.latlng;
-    
-    // Clear temporary marker if exists
+
     if (AppState.maps.roadIntel.tempMarker) {
       AppState.maps.roadIntel.removeLayer(AppState.maps.roadIntel.tempMarker);
     }
-    
+
     const clickIcon = L.divIcon({
       className: 'temp-hazard-marker',
       html: '<div style="background: #ffffff; width:14px; height:14px; border:3px double #f59e0b; border-radius:50%; box-shadow:0 0 10px #f59e0b;"></div>',
       iconSize: [14, 14]
     });
-    
+
     AppState.maps.roadIntel.tempMarker = L.marker(reportedHazardLocation, { icon: clickIcon })
       .addTo(AppState.maps.roadIntel)
       .bindPopup("<b>Placement Selection</b><br>Fill details on form to submit.").openPopup();
-      
+
     document.getElementById('report-location-text').value = `GPS Lat: ${reportedHazardLocation.lat.toFixed(4)}, Lng: ${reportedHazardLocation.lng.toFixed(4)}`;
   });
 }
@@ -1080,125 +1654,83 @@ function submitRoadHazardReport() {
     alert("Please select a Hazard Category first.");
     return;
   }
-  
+
   const type = activeBtn.getAttribute('data-type');
   const locationText = document.getElementById('report-location-text').value;
   const severity = document.getElementById('report-severity').value;
-  
-  // Choose coordinates: use selection pin if clicked, otherwise mock random downtown Detroit location
-  const lat = reportedHazardLocation ? reportedHazardLocation.lat : (42.33 + Math.random() * 0.02);
-  const lng = reportedHazardLocation ? reportedHazardLocation.lng : (-83.04 - Math.random() * 0.02);
-  
+
+  const lat = reportedHazardLocation ? reportedHazardLocation.lat : (12.97 + Math.random() * 0.1);
+  const lng = reportedHazardLocation ? reportedHazardLocation.lng : (77.6 + Math.random() * 0.1);
+
   const newHazard = {
     id: AppState.hazards.length + 1,
-    lat: lat,
-    lng: lng,
-    type: type,
-    severity: severity,
+    lat, lng, type, severity,
     label: locationText || `Reported ${type} hazard`,
-    time: 'Just now',
-    img: 'assets/road_hazard.png'
+    risk: severity === 'Critical' ? 85 : severity === 'High' ? 65 : 45,
+    recommendation: 'Recently reported — approach with caution.',
+    time: 'Just now'
   };
-  
-  // Save in client state DB
+
   AppState.hazards.push(newHazard);
-  
-  // Re-draw on the active map
+
   if (AppState.maps.roadIntel) {
     if (AppState.maps.roadIntel.tempMarker) {
       AppState.maps.roadIntel.removeLayer(AppState.maps.roadIntel.tempMarker);
     }
     renderMapHazards(AppState.maps.roadIntel);
   }
-  
-  // Update Government Dashboard Hazard Count widget
-  document.getElementById('gov-hazard-count').textContent = AppState.hazards.length + 11; // pad with realistic base
-  
+
+  document.getElementById('gov-hazard-count').textContent = AppState.hazards.length + 11;
+
   speakText(`Road hazard submitted. Category: ${type}. Broadcasting incident telemetry to nearby vehicles.`);
-  
-  // Reset form
+
   document.querySelectorAll('.hazard-type-btn').forEach(btn => btn.classList.remove('active'));
   document.getElementById('report-location-text').value = '';
   document.getElementById('upload-status-text').textContent = 'Click to capture/upload hazard image';
   reportedHazardLocation = null;
-  
+
+  RiskEngine.computeOverallRisk();
+  RiskEngine.renderGauge();
+
   alert("Safety report submitted! Coordinates logged on map.");
 }
 
-// --- 7. RISK GAUGE RADIUS ANIMATION ---
+// --- RISK GAUGE (delegates to RiskEngine, retained function name for HTML compatibility) ---
 function animateRiskGauge() {
-  const gaugeBar = document.getElementById('risk-gauge-bar');
+  RiskEngine.computeOverallRisk();
+  RiskEngine.renderGauge();
+
   const gaugeVal = document.getElementById('risk-gauge-val');
-  const gaugeLabel = document.getElementById('risk-gauge-label');
-  
-  if (!gaugeBar) return;
-  
-  const riskIndex = 42; // 0-100 scale
-  
-  // Half-circle: stroke-dasharray is 251 (half of 2*pi*80 ≈ 502)
-  // At 0% risk → dashoffset = 251 (fully hidden)
-  // At 100% risk → dashoffset = 0 (fully visible)
-  const targetOffset = 251 - (251 * (riskIndex / 100));
-  
-  // Reset to start position for animation
-  gaugeBar.style.transition = 'none';
-  gaugeBar.style.strokeDashoffset = '251';
-  
-  // Force reflow then animate
-  void gaugeBar.offsetWidth;
-  gaugeBar.style.transition = 'stroke-dashoffset 1.2s ease-out, stroke 0.8s';
-  gaugeBar.style.strokeDashoffset = targetOffset;
-  
-  // Set color class based on risk level
-  gaugeBar.classList.remove('success', 'warning', 'danger');
-  if (riskIndex <= 30) {
-    gaugeBar.classList.add('success');
-    gaugeBar.style.stroke = 'var(--color-success)';
-  } else if (riskIndex <= 60) {
-    gaugeBar.classList.add('warning');
-    gaugeBar.style.stroke = 'var(--color-warning)';
-  } else {
-    gaugeBar.classList.add('danger');
-    gaugeBar.style.stroke = 'var(--color-danger)';
-  }
-  
-  // Animated counter
+  if (!gaugeVal) return;
+  const riskIndex = AppState.risk.overall;
   gaugeVal.textContent = '0';
   let currentVal = 0;
   const countInterval = setInterval(() => {
-    if (currentVal >= riskIndex) {
-      clearInterval(countInterval);
-      return;
-    }
+    if (currentVal >= riskIndex) { clearInterval(countInterval); return; }
     currentVal++;
     gaugeVal.textContent = currentVal;
   }, 20);
 }
 
-// --- 8. EMERGENCY SOS COUNTER & ANIMATED MAP DISPATCH ---
+// --- EMERGENCY SOS COUNTER & ANIMATED MAP DISPATCH (Bangalore) ---
 function initiateSOSCountdown() {
   const defaultCard = document.getElementById('sos-card-default');
   const countdownCard = document.getElementById('sos-card-countdown');
-  
+
   defaultCard.style.display = 'none';
   countdownCard.style.display = 'flex';
-  
+
   AppState.emergency.countdown = 10;
   document.getElementById('sos-countdown-timer').textContent = AppState.emergency.countdown;
   document.getElementById('sos-countdown-sub').textContent = AppState.emergency.countdown;
-  
-  speakText("Critical Alert. SOS Emergency Triggered. Contacting search and rescue in ten seconds. Select abort to cancel.");
-  
+
+  speakText(VoiceAssistantPhrases.sosReady + " Contacting search and rescue in ten seconds. Select abort to cancel.");
+
   AppState.emergency.countdownId = setInterval(() => {
     AppState.emergency.countdown--;
     document.getElementById('sos-countdown-timer').textContent = AppState.emergency.countdown;
     document.getElementById('sos-countdown-sub').textContent = AppState.emergency.countdown;
-    
-    // Play subtle beep sounds
-    if ('speechSynthesis' in window) {
-      // speakText(AppState.emergency.countdown.toString());
-    }
-    
+
     if (AppState.emergency.countdown <= 0) {
       clearInterval(AppState.emergency.countdownId);
       triggerSOSActiveDispatch();
@@ -1215,70 +1747,64 @@ function abortSOS() {
     clearInterval(AppState.emergency.ambulanceIntervalId);
     AppState.emergency.ambulanceIntervalId = null;
   }
-  
-  // Remove emergency map elements if any
+
   if (AppState.emergency.map) {
     AppState.emergency.map.remove();
     AppState.emergency.map = null;
   }
-  
+
   document.getElementById('sos-card-countdown').style.display = 'none';
   document.getElementById('sos-card-active').style.display = 'none';
   document.getElementById('sos-card-default').style.display = 'flex';
-  
+
   speakText("SOS dispatch cancelled. Returning to standby mode.");
 }
 
 function triggerSOSActiveDispatch() {
   document.getElementById('sos-card-countdown').style.display = 'none';
   document.getElementById('sos-card-active').style.display = 'flex';
-  
-  speakText("Emergency SOS transmission complete. Henry Ford Hospital Ambulance DET 3 4 4 dispatched. ETA 4 minutes.");
-  
-  // Initialize Emergency Dispatch Map
+
+  speakText("Emergency SOS transmission complete. Ambulance BLR 3 4 4 dispatched. ETA 6 minutes.");
+
   setTimeout(() => {
-    const crashCoords = [42.3314, -83.0458];
-    const hospitalCoords = [42.3614, -83.0800];
-    
+    const crashCoords = ROUTE_REVA_TO_AIRPORT[0];
+    const hospitalCoords = [13.0350, 77.6280]; // nearby hospital proxy on route
+
     AppState.emergency.map = L.map('emergency-map', {
       zoomControl: false,
       attributionControl: false
-    }).setView(crashCoords, 13);
-    
+    }).setView(crashCoords, 12);
+
     L.tileLayer(MapTileURL, {
       maxZoom: 19,
       attribution: MapAttrib
     }).addTo(AppState.emergency.map);
-    
-    // Crash site red marker
+
     const crashIcon = L.divIcon({
       className: 'crash-marker',
       html: '<div style="background: var(--color-danger); width:18px; height:18px; border:3px solid #fff; border-radius:50%; box-shadow:0 0 15px var(--color-danger); animation: alertPulse 0.5s infinite alternate;"></div>',
       iconSize: [18, 18]
     });
     L.marker(crashCoords, { icon: crashIcon }).addTo(AppState.emergency.map).bindPopup("<b>Crash Site</b><br>Live GPS Lock").openPopup();
-    
-    // Hospital green icon
+
     const hospitalIcon = L.divIcon({
       className: 'hospital-marker',
       html: '<div style="background: var(--color-success); width:16px; height:16px; border:2px solid #fff; border-radius:50%; box-shadow:0 0 10px var(--color-success);"></div>',
       iconSize: [16, 16]
     });
-    L.marker(hospitalCoords, { icon: hospitalIcon }).addTo(AppState.emergency.map).bindPopup("Henry Ford Hospital");
-    
-    // Ambulance marker dispatch moving animation
+    L.marker(hospitalCoords, { icon: hospitalIcon }).addTo(AppState.emergency.map).bindPopup("Nearest Multi-Speciality Hospital");
+
     let ambLat = hospitalCoords[0];
     let ambLng = hospitalCoords[1];
-    
+
     const ambIcon = L.divIcon({
       className: 'amb-marker',
       html: '<div style="background: var(--color-warning); width:16px; height:16px; border:2px solid #fff; border-radius:50%; box-shadow:0 0 10px var(--color-warning); display:flex; align-items:center; justify-content:center;"><i class="fa fa-ambulance" style="font-size:9px; color:#000;"></i></div>',
       iconSize: [16, 16]
     });
-    
-    AppState.emergency.ambulanceMarker = L.marker([ambLat, ambLng], { icon: ambIcon }).addTo(AppState.emergency.map).bindPopup("Ambulance DET-344");
-    
-    // Moving animation ticks
+
+    AppState.emergency.ambulanceMarker = L.marker([ambLat, ambLng], { icon: ambIcon }).addTo(AppState.emergency.map).bindPopup("Ambulance BLR-344");
+
     let t = 0;
     AppState.emergency.ambulanceIntervalId = setInterval(() => {
       t += 0.05;
@@ -1289,72 +1815,59 @@ function triggerSOSActiveDispatch() {
         speakText("First responders have arrived at vehicle coordinates.");
         return;
       }
-      
-      // Linear interpolation
+
       ambLat = hospitalCoords[0] + (crashCoords[0] - hospitalCoords[0]) * t;
       ambLng = hospitalCoords[1] + (crashCoords[1] - hospitalCoords[1]) * t;
-      
+
       AppState.emergency.ambulanceMarker.setLatLng([ambLat, ambLng]);
-      
-      const remainingMinutes = Math.max(1, Math.round(4 * (1 - t)));
+
+      const remainingMinutes = Math.max(1, Math.round(6 * (1 - t)));
       document.getElementById('sos-ambulance-eta').textContent = `${remainingMinutes} mins`;
-      
+
     }, 2000);
-    
+
   }, 200);
 }
 
-// --- 9. GOVERNMENT DASHBOARD ANALYTICS CHARTS ---
+// --- GOVERNMENT DASHBOARD ANALYTICS CHARTS ---
 function initGovernmentAnalyticsCharts() {
   const ctxBar = document.getElementById('chart-incidents-bar');
   const ctxLine = document.getElementById('chart-score-line');
   const ctxPie = document.getElementById('chart-hazards-pie');
-  
+
   if (!ctxBar || !ctxLine || !ctxPie) return;
-  
-  // Clean previous Chart instances to prevent canvas render warnings
+
   if (AppState.charts.bar) AppState.charts.bar.destroy();
   if (AppState.charts.line) AppState.charts.line.destroy();
   if (AppState.charts.pie) AppState.charts.pie.destroy();
-  
+
   const chartStylesOptions = {
     responsive: true,
     maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        labels: { color: '#94a3b8', font: { family: 'Inter' } }
-      }
-    },
+    plugins: { legend: { labels: { color: '#94a3b8', font: { family: 'Inter' } } } },
     scales: {
       x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
       y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } }
     }
   };
 
-  // 1. Bar Chart: Incidents by Hazard type
   AppState.charts.bar = new Chart(ctxBar, {
     type: 'bar',
     data: {
-      labels: ['Potholes', 'Waterlogging', 'Broken Signals', 'Construction', 'Animal Cross', 'Accidents'],
+      labels: ['Potholes', 'Waterlogging', 'Signals', 'Construction', 'Traffic', 'Accidents'],
       datasets: [{
         label: 'Active Hazard Count',
-        data: [18, 12, 5, 22, 3, 7],
+        data: [18, 12, 5, 22, 14, 7],
         backgroundColor: [
-          'rgba(245, 158, 11, 0.65)',
-          'rgba(37, 99, 235, 0.65)',
-          'rgba(239, 68, 68, 0.65)',
-          'rgba(245, 158, 11, 0.65)',
-          'rgba(34, 197, 94, 0.65)',
-          'rgba(239, 68, 68, 0.65)'
+          'rgba(245, 158, 11, 0.65)', 'rgba(37, 99, 235, 0.65)', 'rgba(239, 68, 68, 0.65)',
+          'rgba(245, 158, 11, 0.65)', 'rgba(59, 130, 246, 0.65)', 'rgba(239, 68, 68, 0.65)'
         ],
-        borderColor: 'rgba(255,255,255,0.1)',
-        borderWidth: 1
+        borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1
       }]
     },
     options: chartStylesOptions
   });
 
-  // 2. Line Chart: Weekly safety scores over time
   AppState.charts.line = new Chart(ctxLine, {
     type: 'line',
     data: {
@@ -1362,46 +1875,31 @@ function initGovernmentAnalyticsCharts() {
       datasets: [{
         label: 'Municipal Safety Index score',
         data: [76, 78, 84, 80, 81, 82.4],
-        fill: true,
-        backgroundColor: 'rgba(37, 99, 235, 0.1)',
-        borderColor: 'rgba(37, 99, 235, 0.85)',
-        tension: 0.3,
-        borderWidth: 3
+        fill: true, backgroundColor: 'rgba(37, 99, 235, 0.1)',
+        borderColor: 'rgba(37, 99, 235, 0.85)', tension: 0.3, borderWidth: 3
       }]
     },
     options: chartStylesOptions
   });
 
-  // 3. Pie Chart: Hazard distribution shares
   AppState.charts.pie = new Chart(ctxPie, {
     type: 'doughnut',
     data: {
       labels: ['Potholes', 'Flooding', 'Obstructions', 'Others'],
       datasets: [{
         data: [42, 28, 20, 10],
-        backgroundColor: [
-          'rgba(245, 158, 11, 0.75)',
-          'rgba(37, 99, 235, 0.75)',
-          'rgba(239, 68, 68, 0.75)',
-          'rgba(255, 255, 255, 0.2)'
-        ],
+        backgroundColor: ['rgba(245, 158, 11, 0.75)', 'rgba(37, 99, 235, 0.75)', 'rgba(239, 68, 68, 0.75)', 'rgba(255, 255, 255, 0.2)'],
         borderWidth: 0
       }]
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          position: 'right',
-          labels: { color: '#94a3b8' }
-        }
-      }
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'right', labels: { color: '#94a3b8' } } }
     }
   });
 }
 
-// --- 10. AI ASSISTANT CHATBOT RESPONSES ---
+// --- AI ASSISTANT CHATBOT RESPONSES ---
 function toggleChatbot() {
   const win = document.getElementById('chatbot-window');
   win.classList.toggle('open');
@@ -1415,13 +1913,12 @@ function handleChatSubmit(event) {
   const inputEl = document.getElementById('chat-user-input');
   const prompt = inputEl.value.trim();
   if (!prompt) return;
-  
+
   appendChatMessage(prompt, 'user');
   inputEl.value = '';
-  
-  // Show typing loader
+
   const loaderId = appendChatLoader();
-  
+
   setTimeout(() => {
     removeChatLoader(loaderId);
     const reply = generateChatbotReply(prompt);
@@ -1433,7 +1930,7 @@ function handleChatSubmit(event) {
 function sendChatbotPredefined(phrase) {
   appendChatMessage(phrase, 'user');
   const loaderId = appendChatLoader();
-  
+
   setTimeout(() => {
     removeChatLoader(loaderId);
     const reply = generateChatbotReply(phrase);
@@ -1471,49 +1968,46 @@ function removeChatLoader(loaderId) {
 
 function generateChatbotReply(prompt) {
   const clean = prompt.toLowerCase();
-  
+
   if (clean.includes('route') || clean.includes('safe')) {
-    return "Current risk is Medium due to heavy traffic and rain. Suggested safer route 'Woodward Safe-Link' is available (Risk Level: 10% vs 65% on I-75 North due to construction zones).";
+    return `Current risk is ${AppState.risk.category} (${AppState.risk.overall}/100). Suggested safer route via Outer Ring Road is available, avoiding Silk Board and Hebbal hotspots.`;
   }
-  
+
   if (clean.includes('hospital') || clean.includes('nearest hospital')) {
-    // Automatically trigger navigation highlight target
-    setTimeout(() => {
-      openNearestHospital();
-    }, 500);
-    return "Displaying nearest emergency ward. Henry Ford Hospital is 0.8 miles away on West Grand Boulevard. Routing has been initialized.";
+    setTimeout(() => { openNearestHospital(); }, 500);
+    return "Displaying nearest hospital along your route corridor. Routing has been initialized.";
   }
-  
+
   if (clean.includes('weather')) {
-    return "Active radar reports rain density is 1.4 inches per hour. Road friction factor is down by 30%. I recommend keeping a safe distance of 140 feet.";
+    const env = AppState.environment;
+    return `Live conditions: ${env.condition}, ${Math.round(env.tempC)}°C, ${env.rainMm} mm/h rain. Road traction reduced by roughly ${100 - EnvironmentAI.computeRoadTraction(env)}%. Maintain a safe following distance.`;
   }
-  
+
   if (clean.includes('simulate') || clean.includes('alert') || clean.includes('tired') || clean.includes('fatigue')) {
-    setTimeout(() => {
-      triggerSimulatedDrowsinessAlert();
-    }, 800);
+    setTimeout(() => { triggerSimulatedDrowsinessAlert(); }, 800);
     return "Acknowledged. Triggering ADAS drowsiness fatigue simulation to display active warnings.";
   }
-  
+
   if (clean.includes('sos') || clean.includes('emergency')) {
     return "You can trigger emergency dispatches by holding the red SOS button or navigating to the Emergency SOS menu panel.";
   }
-  
+
   return "I've logged your query. As your SentinelAI co-driver, I am continually monitoring telematics, crash indicators, weather alerts, and road anomalies.";
 }
 
 function openNearestHospital() {
   navigateTo('safe-drive');
-  document.getElementById('nav-destination-input').value = "Henry Ford Emergency Room (0.8 mi)";
-  document.getElementById('nav-assistant-prompt').textContent = 
-    "\"Ambulance route to Henry Ford ER loaded. Proceed down Grand Boulevard. All traffic lights will hold safety priority green signals.\"";
-  speakText("Routing to nearest emergency room: Henry Ford Emergency Center.");
+  document.getElementById('nav-destination-input').value = "Nearest Multi-Speciality Hospital (2.1 km)";
+  document.getElementById('nav-assistant-prompt').textContent =
+    "\"Ambulance route to nearest hospital loaded. Traffic signal priority requested along corridor.\"";
+  speakText("Routing to nearest emergency room.");
 }
 
-// --- 11. TRIP SUMMARY & PDF REPORT DOWNLOADS ---
+// --- TRIP SUMMARY & REPORT DOWNLOADS ---
 function simulateReportDownload() {
   speakText("Preparing Drive Safety Certificate compilation.");
-  
+
+  const s = AppState.tripScores;
   const reportData = `
 =========================================
 SENTINELAI MOBILITY SAFEOS REPORT
@@ -1521,20 +2015,22 @@ SENTINELAI MOBILITY SAFEOS REPORT
 Trip Summary Certificate
 Stellantis Connected Vehicle Hackathon
 
-Date Logged: 2026-07-24
-Distance: 14.2 miles
-Overall Safety Index Score: 95 / 100
+Date Logged: ${new Date().toISOString().slice(0, 10)}
+Distance: ${AppState.tripScores.distanceKm.toFixed(1)} km
+Driver Safety Score: ${s.driver} / 100
+Environmental Score: ${s.environmental} / 100
+Road Score: ${s.road} / 100
+Overall Safety Score: ${s.overall} / 100
 Collision Warnings Triggered: 0
-Drowsiness Alert Score: 0 (Normal)
-Potholes Avoided: 2
-Waterlogged lane mitigations: 1 (Safe-Link Woodward Route used)
+Near-Miss Events Logged: ${AppState.nearMiss.events.length}
+Route: REVA University -> Kempegowda International Airport
 
 ADAS Active Safety Level: 2+ Active Assist
-Vehcile ID: Chrysler Pacifica PHEV
+Vehicle ID: Chrysler Pacifica PHEV
 =========================================
 Thank you for driving safely!
   `;
-  
+
   const blob = new Blob([reportData], { type: 'text/plain' });
   const anchor = document.createElement('a');
   anchor.download = 'SentinelAI_Safety_Report.txt';
@@ -1542,23 +2038,21 @@ Thank you for driving safely!
   anchor.click();
 }
 
-// Dial Emergency contact simulator
 function dialContact(contactName) {
   speakText(`Connecting phone link to ${contactName}. Directing call audio to main cabin speakers.`);
   alert(`Connecting cellular call link to: ${contactName}`);
 }
 
-// --- 12. SETTINGS PAGE UTILITIES ---
+// --- SETTINGS PAGE UTILITIES ---
 function toggleDarkHudMode() {
   const isDark = document.getElementById('setting-darkmode').checked;
   const root = document.documentElement;
-  
+
   if (isDark) {
     root.style.setProperty('--bg-primary', '#060913');
     root.style.setProperty('--bg-secondary', '#0b0f19');
     root.style.setProperty('--glass-bg', 'rgba(15, 23, 42, 0.55)');
   } else {
-    // CarPlay Light Dashboard mode
     root.style.setProperty('--bg-primary', '#1e293b');
     root.style.setProperty('--bg-secondary', '#334155');
     root.style.setProperty('--glass-bg', 'rgba(255, 255, 255, 0.15)');
@@ -1574,23 +2068,22 @@ function updateVehicleDetails() {
     Charger: { vin: '1C4RD2HK2LS123456', display: 'Dodge Charger Daytona EV' },
     Fiat500e: { vin: '1C4RF3HK3MS789101', display: 'Fiat 500e SafeOS edition' }
   };
-  
+
   const chosen = details[model];
   vinEl.textContent = chosen.vin;
   AppState.settings.vehicleModel = model;
   AppState.settings.vin = chosen.vin;
-  
+
   speakText(`Configuring ADAS telemetry constraints for vehicle model: ${chosen.display}.`);
 }
 
 function saveEmergencySettings() {
   const name = document.getElementById('setting-ice-name').value;
   const phone = document.getElementById('setting-ice-phone').value;
-  
+
   AppState.settings.iceName = name;
   AppState.settings.icePhone = phone;
-  
-  // Update dashboard ICE contact view
+
   const dashboardICE = document.getElementById('dashboard-emergency-contacts');
   if (dashboardICE) {
     dashboardICE.innerHTML = `
@@ -1610,150 +2103,17 @@ function saveEmergencySettings() {
       </div>
     `;
   }
-  
+
   speakText("Emergency contact directories updated.");
   alert("ICE Contact Profiles Saved!");
 }
 
-// --- LIVE WEBCAM & MEDIAPIPE FACE MESH INTEGRATION ---
-async function toggleLiveWebcam() {
-  const videoElement = document.getElementById('webcam-feed');
-  const canvasElement = document.getElementById('face-mesh-canvas');
-  const canvasCtx = canvasElement.getContext('2d');
-  const fallbackImg = document.getElementById('driver-scanner-img');
-  const simOverlay = document.getElementById('simulated-overlay');
-  const statusText = document.getElementById('camera-status-text');
-  const statusDot = document.getElementById('camera-status-dot');
-  const toggleBtn = document.getElementById('btn-toggle-webcam');
-  const scoreVal = document.getElementById('driver-score-val');
-  const scoreLabel = document.getElementById('driver-score-label');
-  const scoreCircle = document.getElementById('driver-score-circle');
-
-  if (AppState.webcam.isLive) {
-    // Turn off webcam
-    if (AppState.webcam.stream) {
-      AppState.webcam.stream.getTracks().forEach(track => track.stop());
-    }
-    AppState.webcam.processVideo = false;
-    clearTimeout(AppState.webcam.simTimeout);
-    
-    AppState.webcam.isLive = false;
-    videoElement.style.display = 'none';
-    fallbackImg.style.display = 'block';
-    simOverlay.style.display = 'block';
-    statusText.textContent = 'Simulated Stream';
-    statusDot.style.background = 'var(--color-warning)';
-    toggleBtn.innerHTML = '<i data-lucide="video"></i> Enable Live Webcam';
-    lucide.createIcons();
-    speakText("Live camera monitoring disabled.");
-    // Clear canvas
-    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-    return;
-  }
-
-  // Turn on webcam
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-    AppState.webcam.stream = stream;
-    videoElement.src = '';
-    videoElement.srcObject = stream;
-    videoElement.style.display = 'block';
-    videoElement.style.transform = 'scaleX(-1)'; // Mirror webcam
-    fallbackImg.style.display = 'none';
-    simOverlay.style.display = 'none';
-    AppState.webcam.isLive = true;
-    
-    statusText.textContent = 'Live AI Stream Active';
-    statusDot.style.background = 'var(--color-success)';
-    toggleBtn.innerHTML = '<i data-lucide="video-off"></i> Disable Webcam';
-    lucide.createIcons();
-    
-    speakText("Live biometric scanner activated.");
-
-    // Initialize MediaPipe Face Mesh
-    const faceMesh = new FaceMesh({locateFile: (file) => {
-      return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
-    }});
-    
-    faceMesh.setOptions({
-      maxNumFaces: 1,
-      refineLandmarks: true,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
-
-    faceMesh.onResults((results) => {
-      // Set canvas dimensions to match video precisely
-      canvasElement.width = videoElement.videoWidth || 640;
-      canvasElement.height = videoElement.videoHeight || 480;
-      canvasCtx.save();
-      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-      
-      // Mirror the canvas just like the video
-      canvasCtx.translate(canvasElement.width, 0);
-      canvasCtx.scale(-1, 1);
-      
-      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-        // Face found!
-        const landmarks = results.multiFaceLandmarks[0];
-        
-        // Draw futuristic tracking mesh
-        canvasCtx.globalAlpha = 0.7;
-        canvasCtx.fillStyle = '#00f0ff'; // Neon blue
-        
-        for (let i = 0; i < landmarks.length; i+=3) { // Skip some points for performance & styling
-          const x = landmarks[i].x * canvasElement.width;
-          const y = landmarks[i].y * canvasElement.height;
-          canvasCtx.beginPath();
-          canvasCtx.arc(x, y, 1.2, 0, 2 * Math.PI);
-          canvasCtx.fill();
-        }
-        
-        // Update dashboard score to HIGH (Alert)
-        const attentiveness = 95 + Math.floor(Math.random() * 4); // 95-98
-        scoreVal.textContent = attentiveness;
-        scoreLabel.textContent = 'Driver Fully Alert';
-        scoreLabel.style.color = 'var(--color-success)';
-        
-        scoreCircle.classList.remove('warning', 'danger');
-        scoreCircle.classList.add('success');
-        scoreCircle.style.strokeDashoffset = 389 - (389 * (attentiveness / 100));
-        
-        document.getElementById('bio-blink').textContent = (14 + Math.floor(Math.random() * 5)) + ' / min';
-        document.getElementById('bio-closure').textContent = '0.22s (Normal)';
-        document.getElementById('bio-gaze').textContent = 'Road Center';
-      } else {
-        // No face detected - Distraction!
-        const score = 42;
-        scoreVal.textContent = score;
-        scoreLabel.textContent = 'Distraction Detected';
-        scoreLabel.style.color = 'var(--color-danger)';
-        
-        scoreCircle.classList.remove('success', 'warning');
-        scoreCircle.classList.add('danger');
-        scoreCircle.style.strokeDashoffset = 389 - (389 * (score / 100));
-        
-        document.getElementById('bio-gaze').textContent = 'Not Focused';
-      }
-      canvasCtx.restore();
-    });
-
-    const camera = new Camera(videoElement, {
-      onFrame: async () => {
-        await faceMesh.send({image: videoElement});
-      },
-      width: 640,
-      height: 480
-    });
-    camera.start();
-    
-  } catch (err) {
-    console.error("Error accessing webcam: ", err);
-    alert("Camera access denied or device not found.");
-    toggleBtn.innerHTML = '<i data-lucide="video"></i> Enable Live Webcam';
-  }
-}
-
+// ============================================================================
+// SECTION 13: UPLOADED VIDEO ANALYSIS (real MediaPipe FaceMesh landmark
+// tracking) — complements the live-webcam heuristic tracker above. Lets a
+// pre-recorded driver clip be scanned for attentiveness the same way the
+// live feed is, reusing the existing biometrics/DriverAI UI hooks.
+// ============================================================================
 async function handleVideoUpload(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -1770,37 +2130,48 @@ async function handleVideoUpload(event) {
   const scoreLabel = document.getElementById('driver-score-label');
   const scoreCircle = document.getElementById('driver-score-circle');
 
-  // Stop any existing webcam stream or video processing
+  // Stop any active live webcam stream / realtime tracker first
   if (AppState.webcam.stream) {
     AppState.webcam.stream.getTracks().forEach(track => track.stop());
     AppState.webcam.stream = null;
   }
+  if (AppState.webcam.animFrameId) {
+    cancelAnimationFrame(AppState.webcam.animFrameId);
+    AppState.webcam.animFrameId = null;
+  }
   AppState.webcam.processVideo = false;
   clearTimeout(AppState.webcam.simTimeout);
-  AppState.webcam.isLive = true; // Treating uploaded video as 'live' for UI toggle purposes
+  AppState.webcam.isLive = true; // treat uploaded clip as a "live" feed for UI purposes
 
   const videoUrl = URL.createObjectURL(file);
   videoElement.srcObject = null;
   videoElement.src = videoUrl;
   videoElement.loop = true;
   videoElement.style.display = 'block';
-  // DO NOT mirror uploaded videos, as they are usually recorded forward-facing
+  // Uploaded footage is typically recorded forward-facing already — don't mirror it
   videoElement.style.transform = 'scaleX(1)';
-  
+
   fallbackImg.style.display = 'none';
   simOverlay.style.display = 'none';
-  
+
   statusText.textContent = 'Analyzing Uploaded Video';
-  statusDot.style.background = 'var(--color-primary)';
+  statusDot.style.backgroundColor = 'var(--color-primary)';
   toggleBtn.innerHTML = '<i data-lucide="video-off"></i> Stop Video';
+  toggleBtn.className = 'btn btn-danger';
   lucide.createIcons();
-  
+
   speakText("Processing uploaded driver video feed.");
 
-  const faceMesh = new FaceMesh({locateFile: (file) => {
-    return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
-  }});
-  
+  if (typeof FaceMesh === 'undefined') {
+    console.warn("MediaPipe FaceMesh library not available — cannot analyze uploaded video.");
+    speakText("Face analysis library unavailable. Please check your network connection.");
+    return;
+  }
+
+  const faceMesh = new FaceMesh({
+    locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
+  });
+
   faceMesh.setOptions({
     maxNumFaces: 1,
     refineLandmarks: true,
@@ -1813,81 +2184,85 @@ async function handleVideoUpload(event) {
     canvasElement.height = videoElement.videoHeight || 480;
     canvasCtx.save();
     canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-    
-    // No transform mirroring for uploaded video canvas
-    
+
     if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
       const landmarks = results.multiFaceLandmarks[0];
+      const meshColor = AppState.webcam.forceDistraction ? '#ef4444' : '#00f0ff';
       canvasCtx.globalAlpha = 0.7;
-      canvasCtx.fillStyle = '#00f0ff';
-      
-      for (let i = 0; i < landmarks.length; i+=3) {
+      canvasCtx.fillStyle = meshColor;
+
+      for (let i = 0; i < landmarks.length; i += 3) {
         const x = landmarks[i].x * canvasElement.width;
         const y = landmarks[i].y * canvasElement.height;
         canvasCtx.beginPath();
-        canvasCtx.arc(x, y, 1.2, 0, 2 * Math.PI);
+        canvasCtx.arc(x, y, AppState.webcam.forceDistraction ? 1.5 : 1.2, 0, 2 * Math.PI);
         canvasCtx.fill();
       }
-      
+
       let attentiveness = 95 + Math.floor(Math.random() * 4);
-      if (AppState.webcam.forceDistraction) {
-        attentiveness = 25 + Math.floor(Math.random() * 10);
-        canvasCtx.fillStyle = '#ef4444'; // Red tracking mesh during emergency
-        for (let i = 0; i < landmarks.length; i+=3) {
-          const x = landmarks[i].x * canvasElement.width;
-          const y = landmarks[i].y * canvasElement.height;
-          canvasCtx.beginPath();
-          canvasCtx.arc(x, y, 1.5, 0, 2 * Math.PI);
-          canvasCtx.fill();
-        }
+      if (AppState.webcam.forceDistraction) attentiveness = 25 + Math.floor(Math.random() * 10);
+
+      AppState.biometrics.score = attentiveness;
+      AppState.biometrics.gaze = AppState.webcam.forceDistraction ? 'Off-road' : 'Road Center';
+
+      if (scoreVal) scoreVal.textContent = attentiveness;
+      if (scoreLabel) {
+        scoreLabel.textContent = AppState.webcam.forceDistraction ? 'CRITICAL DISTRACTION' : 'Driver Fully Alert';
+        scoreLabel.style.color = AppState.webcam.forceDistraction ? 'var(--color-danger)' : 'var(--color-success)';
       }
-      
-      scoreVal.textContent = attentiveness;
-      scoreLabel.textContent = AppState.webcam.forceDistraction ? 'CRITICAL DISTRACTION' : 'Driver Fully Alert';
-      scoreLabel.style.color = AppState.webcam.forceDistraction ? 'var(--color-danger)' : 'var(--color-success)';
-      
-      scoreCircle.classList.remove('warning', 'danger', 'success');
-      scoreCircle.classList.add(AppState.webcam.forceDistraction ? 'danger' : 'success');
-      scoreCircle.style.strokeDashoffset = 389 - (389 * (attentiveness / 100));
-      
-      document.getElementById('bio-blink').textContent = (14 + Math.floor(Math.random() * 5)) + ' / min';
-      document.getElementById('bio-closure').textContent = AppState.webcam.forceDistraction ? '2.10s (Danger)' : '0.22s (Normal)';
-      document.getElementById('bio-gaze').textContent = AppState.webcam.forceDistraction ? 'Off-road' : 'Road Center';
+      if (scoreCircle) {
+        scoreCircle.classList.remove('warning', 'danger', 'success');
+        scoreCircle.classList.add(AppState.webcam.forceDistraction ? 'danger' : 'success');
+        scoreCircle.style.strokeDashoffset = 389 - (389 * (attentiveness / 100));
+      }
+
+      const blinkEl = document.getElementById('bio-blink');
+      const closureEl = document.getElementById('bio-closure');
+      const gazeEl = document.getElementById('bio-gaze');
+      if (blinkEl) blinkEl.textContent = (14 + Math.floor(Math.random() * 5)) + ' / min';
+      if (closureEl) closureEl.textContent = AppState.webcam.forceDistraction ? '2.10s (Danger)' : '0.22s (Normal)';
+      if (gazeEl) {
+        gazeEl.textContent = AppState.biometrics.gaze;
+        gazeEl.style.color = AppState.webcam.forceDistraction ? 'var(--color-danger)' : 'var(--color-success)';
+      }
     } else {
       const score = 42;
-      scoreVal.textContent = score;
-      scoreLabel.textContent = 'Distraction Detected';
-      scoreLabel.style.color = 'var(--color-danger)';
-      
-      scoreCircle.classList.remove('success', 'warning');
-      scoreCircle.classList.add('danger');
-      scoreCircle.style.strokeDashoffset = 389 - (389 * (score / 100));
-      
-      document.getElementById('bio-gaze').textContent = 'Not Focused';
+      AppState.biometrics.score = score;
+      if (scoreVal) scoreVal.textContent = score;
+      if (scoreLabel) {
+        scoreLabel.textContent = 'Distraction Detected';
+        scoreLabel.style.color = 'var(--color-danger)';
+      }
+      if (scoreCircle) {
+        scoreCircle.classList.remove('success', 'warning');
+        scoreCircle.classList.add('danger');
+        scoreCircle.style.strokeDashoffset = 389 - (389 * (score / 100));
+      }
+      const gazeEl = document.getElementById('bio-gaze');
+      if (gazeEl) gazeEl.textContent = 'Not Focused';
     }
     canvasCtx.restore();
   });
 
-  // Handle processing without Camera utility for static video files
   AppState.webcam.processVideo = true;
   AppState.webcam.forceDistraction = false;
-  
+
   videoElement.onplay = () => {
     async function step() {
       if (!AppState.webcam.processVideo || videoElement.paused || videoElement.ended) return;
-      await faceMesh.send({image: videoElement});
+      await faceMesh.send({ image: videoElement });
       requestAnimationFrame(step);
     }
     requestAnimationFrame(step);
   };
-  
-  // Simulate distraction after 5 seconds of video playback
+
+  // Simulate a distraction event partway through playback, for demo purposes
   clearTimeout(AppState.webcam.simTimeout);
   AppState.webcam.simTimeout = setTimeout(() => {
     if (AppState.webcam.isLive && AppState.webcam.processVideo) {
       AppState.webcam.forceDistraction = true;
       speakText("Warning! Critical driver distraction detected. Please pull over immediately!");
-      
+
       const grid = document.querySelector('.driver-monitoring-grid');
       if (grid) {
         grid.style.boxShadow = "inset 0 0 80px rgba(220, 38, 38, 0.4)";
@@ -1895,7 +2270,6 @@ async function handleVideoUpload(event) {
       }
     }
   }, 5000);
-  
-  // Play the video explicitly
-  videoElement.play().catch(e => console.log("Video auto-play prevented:", e));
+
+  videoElement.play().catch((e) => console.log("Video auto-play prevented:", e));
 }
