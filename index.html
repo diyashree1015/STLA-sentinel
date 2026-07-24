@@ -523,17 +523,27 @@
         <section id="page-driver-monitor" class="page-content">
           <div class="driver-monitoring-grid">
             
-            <!-- Left Card: Biometric video simulation -->
+            <!-- Left Card: Biometric video simulation & Live Webcam -->
             <div class="glass-card camera-feed-card">
               <div class="camera-status-pill">
-                <span class="status-dot"></span>
-                <span>Active Camera Stream</span>
+                <span class="status-dot" id="camera-status-dot"></span>
+                <span id="camera-status-text">Simulated Stream</span>
               </div>
               
-              <!-- Canvas or placeholder representing HUD telemetry overlay -->
+              <button id="btn-toggle-webcam" class="btn btn-secondary" onclick="toggleLiveWebcam()" style="position: absolute; top: 16px; right: 16px; z-index: 30; padding: 6px 12px; font-size: 11px;">
+                <i data-lucide="video"></i> Enable Live Webcam
+              </button>
+              
+              <!-- Live Video Feed -->
+              <video id="webcam-feed" autoplay playsinline muted style="display: none; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1);"></video>
+              
+              <!-- Real-time Face Mesh & HUD Canvas -->
+              <canvas id="face-mesh-canvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 15;"></canvas>
+              
+              <!-- Fallback Simulated Scanner Image -->
               <img id="driver-scanner-img" src="assets/driver_scan.png" alt="Driver scanning feed" class="camera-video-mock">
               
-              <div class="biometric-overlay">
+              <div class="biometric-overlay" id="simulated-overlay">
                 <div class="biometric-scanner-line"></div>
                 <!-- Dynamic dots on face mapping overlay -->
                 <div class="biometric-mesh-dots">

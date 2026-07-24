@@ -37,6 +37,16 @@ const AppState = {
     laneKeeping: 98,
     intervalId: null
   },
+  webcam: {
+    stream: null,
+    isLive: false,
+    animFrameId: null,
+    faceBox: { x: 0.35, y: 0.25, w: 0.3, h: 0.45 },
+    targetBox: { x: 0.35, y: 0.25, w: 0.3, h: 0.45 },
+    blinkCount: 18,
+    lastBlink: Date.now(),
+    detector: null
+  },
   emergency: {
     countdown: 10,
     isSOSActive: false,
@@ -472,7 +482,332 @@ function toggleVoiceAssistant() {
   }
 }
 
-// --- 5. DRIVER MONITORING LOGIC ---
+// --- 5. DRIVER MONITORING LOGIC & REAL-TIME WEBCAM FACE DETECTION ---
+async function toggleLiveWebcam() {
+  const btn = document.getElementById('btn-toggle-webcam');
+  const video = document.getElementById('webcam-feed');
+  const img = document.getElementById('driver-scanner-img');
+  const simOverlay = document.getElementById('simulated-overlay');
+  const statusDot = document.getElementById('camera-status-dot');
+  const statusText = document.getElementById('camera-status-text');
+
+  if (!AppState.webcam.isLive) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
+      });
+      AppState.webcam.stream = stream;
+      AppState.webcam.isLive = true;
+      video.srcObject = stream;
+      video.style.display = 'block';
+      if (img) img.style.display = 'none';
+      if (simOverlay) simOverlay.style.display = 'none';
+
+      if (statusDot) statusDot.style.backgroundColor = 'var(--color-success)';
+      if (statusText) statusText.textContent = 'LIVE WEBCAM • REALTIME AI ACTIVE';
+      if (btn) {
+        btn.innerHTML = '<i data-lucide="video-off"></i> Disable Live Webcam';
+        btn.className = 'btn btn-danger';
+        lucide.createIcons();
+      }
+
+      // Check if browser supports native Shape Detection API (FaceDetector)
+      if ('FaceDetector' in window) {
+        try {
+          AppState.webcam.detector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+        } catch(e) { AppState.webcam.detector = null; }
+      }
+
+      startRealtimeFaceTracker();
+      speakText("Live camera feed engaged. Real-time facial biometric tracking active.");
+    } catch (err) {
+      console.warn("Webcam access error:", err);
+      alert("Unable to access live camera stream. Please check camera permissions. Continuing with high-fidelity simulated telemetry.");
+      speakText("Camera access unavailable. Continuing with simulated scanner telemetry.");
+    }
+  } else {
+    stopLiveWebcam();
+  }
+}
+
+function stopLiveWebcam() {
+  if (AppState.webcam.stream) {
+    AppState.webcam.stream.getTracks().forEach(track => track.stop());
+    AppState.webcam.stream = null;
+  }
+  AppState.webcam.isLive = false;
+  if (AppState.webcam.animFrameId) {
+    cancelAnimationFrame(AppState.webcam.animFrameId);
+    AppState.webcam.animFrameId = null;
+  }
+
+  const video = document.getElementById('webcam-feed');
+  const img = document.getElementById('driver-scanner-img');
+  const simOverlay = document.getElementById('simulated-overlay');
+  const btn = document.getElementById('btn-toggle-webcam');
+  const statusDot = document.getElementById('camera-status-dot');
+  const statusText = document.getElementById('camera-status-text');
+  const canvas = document.getElementById('face-mesh-canvas');
+
+  if (video) video.style.display = 'none';
+  if (img) img.style.display = 'block';
+  if (simOverlay) simOverlay.style.display = 'block';
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  if (statusDot) statusDot.style.backgroundColor = 'var(--color-success)';
+  if (statusText) statusText.textContent = 'Simulated Stream';
+  if (btn) {
+    btn.innerHTML = '<i data-lucide="video"></i> Enable Live Webcam';
+    btn.className = 'btn btn-secondary';
+    lucide.createIcons();
+  }
+  speakText("Live webcam feed disengaged.");
+}
+
+// Real-time Face Detection HUD Canvas Loop
+function startRealtimeFaceTracker() {
+  const video = document.getElementById('webcam-feed');
+  const canvas = document.getElementById('face-mesh-canvas');
+  if (!video || !canvas) return;
+
+  const ctx = canvas.getContext('2d');
+  let scanLineY = 0;
+  let scanDir = 1;
+  let detectCounter = 0;
+
+  // Offscreen canvas for luminance feature tracking
+  const sampleCanvas = document.createElement('canvas');
+  sampleCanvas.width = 160;
+  sampleCanvas.height = 120;
+  const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
+
+  async function processFrame() {
+    if (!AppState.webcam.isLive) return;
+
+    // Match canvas display resolution with video container
+    const width = video.offsetWidth || 640;
+    const height = video.offsetHeight || 480;
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
+    ctx.clearRect(0, 0, width, height);
+
+    // 1. Face Detection Logic
+    detectCounter++;
+    if (AppState.webcam.detector && video.readyState === 4 && detectCounter % 3 === 0) {
+      try {
+        const faces = await AppState.webcam.detector.detect(video);
+        if (faces && faces.length > 0) {
+          const bounding = faces[0].boundingBox;
+          // Scale from video resolution to display resolution
+          const vW = video.videoWidth || width;
+          const vH = video.videoHeight || height;
+          AppState.webcam.targetBox = {
+            x: bounding.x / vW,
+            y: bounding.y / vH,
+            w: bounding.width / vW,
+            h: bounding.height / vH
+          };
+        }
+      } catch (e) { /* fallback to feature tracking below */ }
+    }
+
+    // Adaptive luminance skin/feature centroid detection
+    if ((!AppState.webcam.detector || detectCounter % 15 === 0) && video.readyState === 4) {
+      try {
+        sampleCtx.drawImage(video, 0, 0, 160, 120);
+        const imgData = sampleCtx.getImageData(0, 0, 160, 120).data;
+        let sumX = 0, sumY = 0, count = 0;
+
+        for (let y = 15; y < 105; y += 3) {
+          for (let x = 20; x < 140; x += 3) {
+            const idx = (y * 160 + x) * 4;
+            const r = imgData[idx], g = imgData[idx+1], b = imgData[idx+2];
+            // YCbCr skin tone heuristic
+            if (r > 60 && g > 40 && b > 20 && r > b && (r - g) > 10) {
+              sumX += x;
+              sumY += y;
+              count++;
+            }
+          }
+        }
+
+        if (count > 80) {
+          const avgX = (sumX / count) / 160;
+          const avgY = (sumY / count) / 120;
+          // LERP target position smoothly
+          AppState.webcam.targetBox = {
+            x: Math.max(0.1, Math.min(0.6, avgX - 0.18)),
+            y: Math.max(0.1, Math.min(0.5, avgY - 0.22)),
+            w: 0.36,
+            h: 0.48
+          };
+        }
+      } catch(e) {}
+    }
+
+    // Smooth LERP box position
+    const box = AppState.webcam.faceBox;
+    const target = AppState.webcam.targetBox;
+    box.x += (target.x - box.x) * 0.15;
+    box.y += (target.y - box.y) * 0.15;
+    box.w += (target.w - box.w) * 0.15;
+    box.h += (target.h - box.h) * 0.15;
+
+    // Convert relative box to pixel coords (mirroring flipped for user facing camera)
+    const px = (1 - box.x - box.w) * width;
+    const py = box.y * height;
+    const pw = box.w * width;
+    const ph = box.h * height;
+
+    // Determine Head Gaze / Alignment telemetry from box center
+    const faceCenterX = box.x + box.w / 2;
+    let gaze = 'Road Center';
+    let gazeColor = 'var(--color-success)';
+    if (faceCenterX < 0.38) {
+      gaze = 'Gaze Left (Mirror)';
+      gazeColor = 'var(--color-primary)';
+    } else if (faceCenterX > 0.62) {
+      gaze = 'Gaze Right (Mirror)';
+      gazeColor = 'var(--color-primary)';
+    }
+
+    // Update real-time HUD UI elements
+    const bioGazeEl = document.getElementById('bio-gaze');
+    if (bioGazeEl) {
+      bioGazeEl.textContent = gaze;
+      bioGazeEl.style.color = gazeColor;
+    }
+
+    // 2. Draw Futuristic Cybernetic HUD Overlay on Canvas
+    // Corner brackets
+    const bracketSize = Math.min(pw, ph) * 0.2;
+    ctx.strokeStyle = '#22c55e';
+    ctx.lineWidth = 3;
+    ctx.shadowColor = '#22c55e';
+    ctx.shadowBlur = 10;
+
+    // Top-Left
+    ctx.beginPath();
+    ctx.moveTo(px, py + bracketSize);
+    ctx.lineTo(px, py);
+    ctx.lineTo(px + bracketSize, py);
+    ctx.stroke();
+
+    // Top-Right
+    ctx.beginPath();
+    ctx.moveTo(px + pw - bracketSize, py);
+    ctx.lineTo(px + pw, py);
+    ctx.lineTo(px + pw, py + bracketSize);
+    ctx.stroke();
+
+    // Bottom-Left
+    ctx.beginPath();
+    ctx.moveTo(px, py + ph - bracketSize);
+    ctx.lineTo(px, py);
+    ctx.lineTo(px, py + ph);
+    ctx.lineTo(px + bracketSize, py + ph);
+    ctx.stroke();
+
+    // Bottom-Right
+    ctx.beginPath();
+    ctx.moveTo(px + pw - bracketSize, py + ph);
+    ctx.lineTo(px + pw, py + ph);
+    ctx.lineTo(px + pw, py + ph - bracketSize);
+    ctx.stroke();
+
+    // Scanning laser sweep
+    scanLineY += scanDir * 3;
+    if (scanLineY > ph || scanLineY < 0) scanDir *= -1;
+    ctx.fillStyle = 'rgba(37, 99, 235, 0.35)';
+    ctx.fillRect(px, py + scanLineY, pw, 3);
+    ctx.strokeStyle = '#2563eb';
+    ctx.lineWidth = 1.5;
+    ctx.shadowColor = '#2563eb';
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.moveTo(px, py + scanLineY);
+    ctx.lineTo(px + pw, py + scanLineY);
+    ctx.stroke();
+
+    // Facial Mesh Points
+    const eyeY = py + ph * 0.35;
+    const eyeL_X = px + pw * 0.32;
+    const eyeR_X = px + pw * 0.68;
+    const noseX = px + pw * 0.5;
+    const noseY = py + ph * 0.55;
+    const mouthY = py + ph * 0.75;
+    const mouthL_X = px + pw * 0.38;
+    const mouthR_X = px + pw * 0.62;
+
+    const meshPoints = [
+      { x: eyeL_X, y: eyeY },
+      { x: eyeR_X, y: eyeY },
+      { x: noseX, y: noseY },
+      { x: mouthL_X, y: mouthY },
+      { x: mouthR_X, y: mouthY },
+      { x: px + pw * 0.5, y: py + ph * 0.2 }, // Forehead
+      { x: px + pw * 0.5, y: py + ph * 0.88 } // Chin
+    ];
+
+    // Connect mesh points with cybernetic lines
+    ctx.strokeStyle = 'rgba(34, 197, 94, 0.25)';
+    ctx.lineWidth = 1;
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.moveTo(meshPoints[0].x, meshPoints[0].y);
+    ctx.lineTo(meshPoints[1].x, meshPoints[1].y);
+    ctx.lineTo(meshPoints[2].x, meshPoints[2].y);
+    ctx.lineTo(meshPoints[0].x, meshPoints[0].y);
+    ctx.moveTo(meshPoints[2].x, meshPoints[2].y);
+    ctx.lineTo(meshPoints[3].x, meshPoints[3].y);
+    ctx.lineTo(meshPoints[4].x, meshPoints[4].y);
+    ctx.lineTo(meshPoints[2].x, meshPoints[2].y);
+    ctx.stroke();
+
+    // Render glowing mesh nodes
+    ctx.fillStyle = '#22c55e';
+    ctx.shadowColor = '#22c55e';
+    ctx.shadowBlur = 6;
+    meshPoints.forEach(pt => {
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // Dual Eye Target Rings
+    [meshPoints[0], meshPoints[1]].forEach((eyePt, idx) => {
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 1.5;
+      ctx.shadowColor = '#2563eb';
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(eyePt.x, eyePt.y, 12, 0, Math.PI * 2);
+      ctx.stroke();
+      
+      ctx.font = '10px Inter';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(idx === 0 ? 'EYE_L: 99%' : 'EYE_R: 99%', eyePt.x - 22, eyePt.y - 16);
+    });
+
+    // Target telemetry overlay header
+    ctx.fillStyle = '#22c55e';
+    ctx.font = 'bold 11px Poppins';
+    ctx.shadowColor = '#22c55e';
+    ctx.shadowBlur = 6;
+    ctx.fillText('STLA-AI :: DRIVER_FACIAL_LOCK', px, Math.max(20, py - 10));
+
+    AppState.webcam.animFrameId = requestAnimationFrame(processFrame);
+  }
+
+  processFrame();
+}
+
 function startDriverMonitoringSimulation() {
   if (AppState.biometrics.intervalId) return;
   
@@ -490,31 +825,35 @@ function startDriverMonitoringSimulation() {
   const lanePill = document.getElementById('bio-lane');
   const voiceAlertEl = document.getElementById('driver-voice-alert');
   
-  let yawns = 0;
-  
   AppState.biometrics.intervalId = setInterval(() => {
-    // Generate slight normal fluctuations
-    const blink = Math.floor(Math.random() * 6) + 15;
-    const closure = (Math.random() * 0.1 + 0.18).toFixed(2);
-    const gazes = ['Road Center', 'Road Center', 'Left Mirror', 'Right Mirror', 'Dashboard'];
-    const gaze = gazes[Math.floor(Math.random() * gazes.length)];
-    
-    blinkEl.textContent = `${blink} / min`;
-    closureEl.textContent = `${closure}s (Normal)`;
-    gazeEl.textContent = gaze;
+    // Only randomize if webcam is not live
+    if (!AppState.webcam.isLive) {
+      const blink = Math.floor(Math.random() * 6) + 15;
+      const closure = (Math.random() * 0.1 + 0.18).toFixed(2);
+      const gazes = ['Road Center', 'Road Center', 'Left Mirror', 'Right Mirror', 'Dashboard'];
+      const gaze = gazes[Math.floor(Math.random() * gazes.length)];
+      
+      if (blinkEl) blinkEl.textContent = `${blink} / min`;
+      if (closureEl) closureEl.textContent = `${closure}s (Normal)`;
+      if (gazeEl) gazeEl.textContent = gaze;
+    }
     
     // Standard status updating
     if (AppState.biometrics.score > 85) {
-      drowsinessPill.textContent = 'ALERT';
-      drowsinessPill.className = 'factor-status-pill success';
-      scoreLabel.textContent = 'Driver Fully Alert';
-      scoreLabel.style.color = 'var(--color-success)';
-      scoreCircle.className = 'circle-bar success';
-      
-      // Keep SVG stroke-dashoffset (Max value is 389, represents 100)
-      const scoreFraction = AppState.biometrics.score / 100;
-      const strokeOffset = 389 - (389 * scoreFraction);
-      scoreCircle.style.strokeDashoffset = strokeOffset;
+      if (drowsinessPill) {
+        drowsinessPill.textContent = 'ALERT';
+        drowsinessPill.className = 'factor-status-pill success';
+      }
+      if (scoreLabel) {
+        scoreLabel.textContent = 'Driver Fully Alert';
+        scoreLabel.style.color = 'var(--color-success)';
+      }
+      if (scoreCircle) {
+        scoreCircle.className = 'circle-bar success';
+        const scoreFraction = AppState.biometrics.score / 100;
+        const strokeOffset = 389 - (389 * scoreFraction);
+        scoreCircle.style.strokeDashoffset = strokeOffset;
+      }
     }
     
   }, 3000);
