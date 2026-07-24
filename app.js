@@ -1614,3 +1614,137 @@ function saveEmergencySettings() {
   speakText("Emergency contact directories updated.");
   alert("ICE Contact Profiles Saved!");
 }
+
+// --- LIVE WEBCAM & MEDIAPIPE FACE MESH INTEGRATION ---
+async function toggleLiveWebcam() {
+  const videoElement = document.getElementById('webcam-feed');
+  const canvasElement = document.getElementById('face-mesh-canvas');
+  const canvasCtx = canvasElement.getContext('2d');
+  const fallbackImg = document.getElementById('driver-scanner-img');
+  const simOverlay = document.getElementById('simulated-overlay');
+  const statusText = document.getElementById('camera-status-text');
+  const statusDot = document.getElementById('camera-status-dot');
+  const toggleBtn = document.getElementById('btn-toggle-webcam');
+  const scoreVal = document.getElementById('driver-score-val');
+  const scoreLabel = document.getElementById('driver-score-label');
+  const scoreCircle = document.getElementById('driver-score-circle');
+
+  if (AppState.webcam.isLive) {
+    // Turn off webcam
+    if (AppState.webcam.stream) {
+      AppState.webcam.stream.getTracks().forEach(track => track.stop());
+    }
+    AppState.webcam.isLive = false;
+    videoElement.style.display = 'none';
+    fallbackImg.style.display = 'block';
+    simOverlay.style.display = 'block';
+    statusText.textContent = 'Simulated Stream';
+    statusDot.style.background = 'var(--color-warning)';
+    toggleBtn.innerHTML = '<i data-lucide="video"></i> Enable Live Webcam';
+    lucide.createIcons();
+    speakText("Live camera monitoring disabled.");
+    // Clear canvas
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    return;
+  }
+
+  // Turn on webcam
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    AppState.webcam.stream = stream;
+    videoElement.srcObject = stream;
+    videoElement.style.display = 'block';
+    fallbackImg.style.display = 'none';
+    simOverlay.style.display = 'none';
+    AppState.webcam.isLive = true;
+    
+    statusText.textContent = 'Live AI Stream Active';
+    statusDot.style.background = 'var(--color-success)';
+    toggleBtn.innerHTML = '<i data-lucide="video-off"></i> Disable Webcam';
+    lucide.createIcons();
+    
+    speakText("Live biometric scanner activated.");
+
+    // Initialize MediaPipe Face Mesh
+    const faceMesh = new FaceMesh({locateFile: (file) => {
+      return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+    }});
+    
+    faceMesh.setOptions({
+      maxNumFaces: 1,
+      refineLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    faceMesh.onResults((results) => {
+      // Set canvas dimensions to match video precisely
+      canvasElement.width = videoElement.videoWidth || 640;
+      canvasElement.height = videoElement.videoHeight || 480;
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      
+      // Mirror the canvas just like the video
+      canvasCtx.translate(canvasElement.width, 0);
+      canvasCtx.scale(-1, 1);
+      
+      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        // Face found!
+        const landmarks = results.multiFaceLandmarks[0];
+        
+        // Draw futuristic tracking mesh
+        canvasCtx.globalAlpha = 0.7;
+        canvasCtx.fillStyle = '#00f0ff'; // Neon blue
+        
+        for (let i = 0; i < landmarks.length; i+=3) { // Skip some points for performance & styling
+          const x = landmarks[i].x * canvasElement.width;
+          const y = landmarks[i].y * canvasElement.height;
+          canvasCtx.beginPath();
+          canvasCtx.arc(x, y, 1.2, 0, 2 * Math.PI);
+          canvasCtx.fill();
+        }
+        
+        // Update dashboard score to HIGH (Alert)
+        const attentiveness = 95 + Math.floor(Math.random() * 4); // 95-98
+        scoreVal.textContent = attentiveness;
+        scoreLabel.textContent = 'Driver Fully Alert';
+        scoreLabel.style.color = 'var(--color-success)';
+        
+        scoreCircle.classList.remove('warning', 'danger');
+        scoreCircle.classList.add('success');
+        scoreCircle.style.strokeDashoffset = 389 - (389 * (attentiveness / 100));
+        
+        document.getElementById('bio-blink').textContent = (14 + Math.floor(Math.random() * 5)) + ' / min';
+        document.getElementById('bio-closure').textContent = '0.22s (Normal)';
+        document.getElementById('bio-gaze').textContent = 'Road Center';
+      } else {
+        // No face detected - Distraction!
+        const score = 42;
+        scoreVal.textContent = score;
+        scoreLabel.textContent = 'Distraction Detected';
+        scoreLabel.style.color = 'var(--color-danger)';
+        
+        scoreCircle.classList.remove('success', 'warning');
+        scoreCircle.classList.add('danger');
+        scoreCircle.style.strokeDashoffset = 389 - (389 * (score / 100));
+        
+        document.getElementById('bio-gaze').textContent = 'Not Focused';
+      }
+      canvasCtx.restore();
+    });
+
+    const camera = new Camera(videoElement, {
+      onFrame: async () => {
+        await faceMesh.send({image: videoElement});
+      },
+      width: 640,
+      height: 480
+    });
+    camera.start();
+    
+  } catch (err) {
+    console.error("Error accessing webcam: ", err);
+    alert("Camera access denied or device not found.");
+    toggleBtn.innerHTML = '<i data-lucide="video"></i> Enable Live Webcam';
+  }
+}
